@@ -448,6 +448,35 @@ app.post('/api/emergency_stop', (req, res) => {
     res.json({ success, action: 'emergency_stop' });
 });
 
+app.post('/verify-firebase-token', async (req, res) => {
+  try {
+    const { idToken, isNewUser } = req.body;
+    
+    // Verify the ID token
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const uid = decodedToken.uid;
+    const email = decodedToken.email;
+    
+    if (isNewUser) {
+      console.log('New user registered:', { uid, email });
+      // Here you can save user data to your database
+    } else {
+      console.log('User authenticated:', { uid, email });
+    }
+    
+    res.json({ 
+      success: true, 
+      uid: uid,
+      email: email,
+      isNewUser: isNewUser || false
+    });
+    
+  } catch (error) {
+    console.error('Token verification error:', error);
+    res.status(401).json({ error: 'Invalid token' });
+  }
+});
+
 // Sensor data endpoints
 app.get('/api/sensors/battery', requireAuth, (req, res) => {
     if (turtlebot.batteryData) {
