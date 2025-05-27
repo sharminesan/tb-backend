@@ -17,22 +17,40 @@ const io = socketIo(server, {
 const port = 3000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173', 'http://localhost:3000'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    optionsSuccessStatus: 200
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
-    secret: 'turtlebot-secret-key',
+    secret: 'turtlebot-secret-key-2024',
     resave: false,
-    saveUninitialized: true,
-    cookie: { secure: false }
+    saveUninitialized: false,
+    name: 'turtlebot.sid',
+    cookie: { 
+        secure: false, // Set to true if using HTTPS
+        httpOnly: false, // Change to false to allow frontend access
+        maxAge: 24 * 60 * 60 * 1000, // 24 hours
+        sameSite: 'lax'
+    }
 }));
 
 // Serve static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// User authentication
+// Enhanced user management
 const users = {
-    'admin': { password: 'admin123' }
+    'admin': { 
+        password: 'admin123',
+        role: 'admin',
+        lastLogin: null,
+        loginAttempts: 0,
+        lockedUntil: null
+    }
 };
 
 // TurtleBot Controller Class (Modified for Windows compatibility)
@@ -325,17 +343,45 @@ class TurtleBotController {
 // Initialize TurtleBot controller
 const turtlebot = new TurtleBotController();
 
-// Authentication middleware
+// Rate limiting for login attempts
+const loginAttempts = new Map();
+
+function rateLimitLogin(req, res, next) {
+    const ip = req.ip;
+    const attempts = loginAttempts.get(ip) || { count: 0, resetTime: Date.now() };
+    
+    if (Date.now() > attempts.resetTime) {
+        attempts.count = 0;
+        attempts.resetTime = Date.now() + 15 * 60 * 1000; // 15 minutes
+    }
+    
+    if (attempts.count >= 5) {
+        return res.status(429).json({ 
+            success: false, 
+            error: 'Too many login attempts. Try again later.' 
+        });
+    }
+    
+    loginAttempts.set(ip, attempts);
+    next();
+}
+
+// Enhanced authentication middleware
 function requireAuth(req, res, next) {
     if (!req.session.user) {
-        return res.status(401).json({ error: 'Authentication required' });
+        return res.status(401).json({ 
+            success: false, 
+            error: 'Authentication required',
+            redirect: '/login'
+        });
     }
     next();
 }
 
-// Routes
+// Redirect root to login if not authenticated (replace existing app.get('/'))
 app.get('/', (req, res) => {
-    res.send(`
+    if (req.session.user) {
+        res.send(`
         <!DOCTYPE html>
         <html>
         <head>
@@ -344,9 +390,17 @@ app.get('/', (req, res) => {
                 body { font-family: Arial, sans-serif; margin: 40px; }
                 .status { background: #f0f0f0; padding: 20px; border-radius: 10px; margin: 20px 0; }
                 .api-list { background: #e8f4f8; padding: 20px; border-radius: 10px; }
+                .user-info { background: #d4edda; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
+                .logout-btn { background: #dc3545; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; }
             </style>
         </head>
         <body>
+            <div class="user-info">
+                <h3>Welcome, ${req.session.user}!</h3>
+                <p>Role: ${req.session.role || 'admin'}</p>
+                <a href="#" class="logout-btn" onclick="logout()">Logout</a>
+            </div>
+            
             <h1>TurtleBot Control Server</h1>
             <div class="status">
                 <h2>Server Status</h2>
@@ -360,6 +414,7 @@ app.get('/', (req, res) => {
                 <ul>
                     <li>POST /api/login - User authentication</li>
                     <li>POST /api/logout - User logout</li>
+                    <li>GET /api/auth/status - Check authentication status</li>
                     <li>GET /api/status - Robot status</li>
                     <li>POST /api/move/forward - Move forward</li>
                     <li>POST /api/move/backward - Move backward</li>
@@ -372,31 +427,281 @@ app.get('/', (req, res) => {
                     <li>GET /api/sensors/laser - Laser scan data</li>
                 </ul>
             </div>
+            
+            <script>                async function logout() {
+                    try {
+                        const response = await fetch('/api/logout', { 
+                            method: 'POST',
+                            credentials: 'include'
+                        });
+                        const result = await response.json();
+                        if (result.success) {
+                            window.location.href = '/login';
+                        }
+                    } catch (error) {
+                        console.error('Logout failed:', error);
+                    }
+                }
+            </script>
+        </body>
+        </html>
+    `);
+    } else {
+        res.redirect('/login');
+    }
+});
+
+// Enhanced login route (replace existing /api/login)
+app.post('/api/login', rateLimitLogin, (req, res) => {
+    const { username, password } = req.body;
+    
+    if (!username || !password) {
+        return res.status(400).json({ 
+            success: false, 
+            error: 'Username and password required' 
+        });
+    }
+    
+    const user = users[username];
+    
+    // Check if user exists and account is not locked
+    if (!user) {
+        const ip = req.ip;
+        const attempts = loginAttempts.get(ip) || { count: 0, resetTime: Date.now() };
+        attempts.count += 1;
+        loginAttempts.set(ip, attempts);
+        
+        return res.status(401).json({ 
+            success: false, 
+            error: 'Invalid credentials' 
+        });
+    }
+    
+    // Check if account is locked
+    if (user.lockedUntil && Date.now() < user.lockedUntil) {
+        return res.status(423).json({ 
+            success: false, 
+            error: 'Account temporarily locked due to multiple failed attempts' 
+        });
+    }
+    
+    // Verify password
+    if (user.password !== password) {
+        user.loginAttempts = (user.loginAttempts || 0) + 1;
+        
+        if (user.loginAttempts >= 5) {
+            user.lockedUntil = Date.now() + 15 * 60 * 1000; // Lock for 15 minutes
+        }
+        
+        const ip = req.ip;
+        const attempts = loginAttempts.get(ip) || { count: 0, resetTime: Date.now() };
+        attempts.count += 1;
+        loginAttempts.set(ip, attempts);
+        
+        return res.status(401).json({ 
+            success: false, 
+            error: 'Invalid credentials' 
+        });
+    }
+      // Successful login
+    user.loginAttempts = 0;
+    user.lockedUntil = null;
+    user.lastLogin = new Date().toISOString();
+    
+    req.session.user = username;
+    req.session.role = user.role;
+    
+    console.log("LOGGED IN - Session ID:", req.sessionID);
+    console.log("LOGGED IN - Session user:", req.session.user);
+    console.log("LOGGED IN - Session data:", req.session);
+    
+    res.json({ 
+        success: true, 
+        message: 'Login successful', 
+        user: {
+            username: username,
+            role: user.role,
+            lastLogin: user.lastLogin
+        }
+    });
+});
+
+// Enhanced logout route (replace existing /api/logout)
+app.post('/api/logout', (req, res) => {
+    const user = req.session.user;
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({ 
+                success: false, 
+                error: 'Logout failed' 
+            });
+        }
+        
+        // Stop robot movement on logout
+        if (turtlebot) {
+            turtlebot.stop();
+        }
+        
+        res.json({ 
+            success: true, 
+            message: 'Logged out successfully' 
+        });
+    });
+});
+
+// Check authentication status
+app.get('/api/auth/status', (req, res) => {
+    console.log('Auth status check - Origin:', req.get('Origin'));
+    console.log('Auth status check - Cookie:', req.get('Cookie'));
+    console.log('Auth status check - Session ID:', req.sessionID);
+    console.log('Auth status check - Session user:', req.session.user);
+    
+    if (req.session.user) {
+        const user = users[req.session.user];
+        console.log("AUTHENTICATED - User:", req.session.user);
+        res.json({ 
+            authenticated: true, 
+            user: {
+                username: req.session.user,
+                role: req.session.role,
+                lastLogin: user.lastLogin
+            }
+        });
+    } else {
+        console.log("NOT AUTHENTICATED - New session created");
+        res.json({ authenticated: false });
+    }
+});
+
+// Serve login page
+app.get('/login', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>TurtleBot Login</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f5f5f5; }
+                .login-container { max-width: 400px; margin: 100px auto; padding: 20px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                .form-group { margin-bottom: 15px; }
+                label { display: block; margin-bottom: 5px; font-weight: bold; }
+                input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; }
+                button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+                button:hover { background: #0056b3; }
+                .error { color: red; margin-top: 10px; }
+                .header { text-align: center; margin-bottom: 30px; }
+            </style>
+        </head>
+        <body>
+            <div class="login-container">
+                <div class="header">
+                    <h2>🤖 TurtleBot Control</h2>
+                    <p>Please login to continue</p>
+                </div>
+                <form id="loginForm">
+                    <div class="form-group">
+                        <label for="username">Username:</label>
+                        <input type="text" id="username" name="username" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password:</label>
+                        <input type="password" id="password" name="password" required>
+                    </div>
+                    <button type="submit">Login</button>
+                    <div id="error" class="error"></div>
+                </form>
+            </div>
+            
+            <script>
+                document.getElementById('loginForm').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const formData = new FormData(e.target);
+                    const data = Object.fromEntries(formData);
+                      try {
+                        const response = await fetch('/api/login', {
+                            method: 'POST',
+                            credentials: 'include', // Important: Include cookies
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(data)
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (result.success) {
+                            window.location.href = '/';
+                        } else {
+                            document.getElementById('error').textContent = result.error;
+                        }
+                    } catch (error) {
+                        document.getElementById('error').textContent = 'Login failed. Please try again.';
+                    }
+                });
+            </script>
         </body>
         </html>
     `);
 });
 
-app.post('/api/login', (req, res) => {
-    const { username, password } = req.body;
-    
-    if (users[username] && users[username].password === password) {
-        req.session.user = username;
-        res.json({ success: true, message: 'Login successful', user: username });
-    } else {
-        res.status(401).json({ success: false, message: 'Invalid credentials' });
-    }
-});
-
-app.post('/api/logout', (req, res) => {
-    const user = req.session.user;
-    req.session.destroy((err) => {
-        if (err) {
-            return res.status(500).json({ success: false, message: 'Logout failed' });
-        }
-        turtlebot.stop();
-        res.json({ success: true, message: 'Logged out successfully' });
-    });
+// Test endpoint for debugging sessions
+app.get('/test', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Session Test</title>
+        </head>
+        <body>
+            <h1>Session Test Page</h1>
+            <div id="status"></div>
+            <button onclick="login()">Test Login</button>
+            <button onclick="checkAuth()">Check Auth</button>
+            <button onclick="logout()">Test Logout</button>
+            
+            <script>
+                async function login() {
+                    try {
+                        const response = await fetch('/api/login', {
+                            method: 'POST',
+                            credentials: 'include',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username: 'admin', password: 'admin123' })
+                        });
+                        const result = await response.json();
+                        document.getElementById('status').innerHTML = 'Login: ' + JSON.stringify(result);
+                    } catch (error) {
+                        document.getElementById('status').innerHTML = 'Login Error: ' + error.message;
+                    }
+                }
+                
+                async function checkAuth() {
+                    try {
+                        const response = await fetch('/api/auth/status', {
+                            method: 'GET',
+                            credentials: 'include'
+                        });
+                        const result = await response.json();
+                        document.getElementById('status').innerHTML = 'Auth Status: ' + JSON.stringify(result);
+                    } catch (error) {
+                        document.getElementById('status').innerHTML = 'Auth Error: ' + error.message;
+                    }
+                }
+                
+                async function logout() {
+                    try {
+                        const response = await fetch('/api/logout', {
+                            method: 'POST',
+                            credentials: 'include'
+                        });
+                        const result = await response.json();
+                        document.getElementById('status').innerHTML = 'Logout: ' + JSON.stringify(result);
+                    } catch (error) {
+                        document.getElementById('status').innerHTML = 'Logout Error: ' + error.message;
+                    }
+                }
+            </script>
+        </body>
+        </html>
+    `);
 });
 
 app.get('/api/status', requireAuth, (req, res) => {
