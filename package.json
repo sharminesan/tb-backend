@@ -1,16 +1,32 @@
 {
   "name": "turtlebot-backend",
   "version": "1.0.0",
+  "description": "Node.js backend for TurtleBot1 control",
   "main": "index.js",
   "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "description": "",
+  "keywords": [
+    "turtlebot",
+    "ros",
+    "robotics",
+    "nodejs",
+    "express"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
   "dependencies": {
-    "express": "^5.1.0",
-    "rosnodejs": "^3.1.0"
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "express-session": "^1.17.3",
+    "cors": "^2.8.5"
+  },
+  "optionalDependencies": {
+    "rosnodejs": "^3.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
   }
 }

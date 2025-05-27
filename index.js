@@ -1,0 +1,550 @@
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+const session = require('express-session');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+const port = 3000;
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(session({
+    secret: 'turtlebot-secret-key',
+    resave: false,
+    saveUninitialized: true,
+    cookie: { secure: false }
+}));
+
+// Serve static files
+app.use(express.static(path.join(__dirname, 'public')));
+
+// User authentication
+const users = {
+    'admin': { password: 'admin123' }
+};
+
+// TurtleBot Controller Class (Modified for Windows compatibility)
+class TurtleBotController {
+    constructor() {
+        this.rosNode = null;
+        this.cmdVelPublisher = null;
+        this.batterySubscriber = null;
+        this.odomSubscriber = null;
+        this.laserSubscriber = null;
+        this.isConnected = false;
+        this.currentTwist = { linear: { x: 0, y: 0, z: 0 }, angular: { x: 0, y: 0, z: 0 } };
+        this.batteryData = null;
+        this.odomData = null;
+        this.laserData = null;
+        this.isMoving = false;
+        this.rosMode = false; // Flag to indicate if ROS is available
+        
+        this.initializeROS();
+    }
+
+    async initializeROS() {
+        try {
+            // Try to import rosnodejs dynamically
+            const rosnodejs = await import('rosnodejs');
+            
+            // Check if ROS environment is available
+            if (!process.env.CMAKE_PREFIX_PATH && !process.env.ROS_PACKAGE_PATH) {
+                console.warn('ROS environment not detected. Running in simulation mode.');
+                this.initializeSimulationMode();
+                return;
+            }
+
+            // Initialize ROS node
+            this.rosNode = await rosnodejs.initNode('/turtlebot_web_controller', {
+                onTheFly: true
+            });
+            
+            console.log('ROS node initialized successfully');
+
+            // Create command velocity publisher
+            this.cmdVelPublisher = this.rosNode.advertise('/cmd_vel', 'geometry_msgs/Twist');
+            console.log('Command velocity publisher created');
+
+            // Subscribe to battery status
+            this.batterySubscriber = this.rosNode.subscribe('/laptop_charge', 'smart_battery_msgs/SmartBatteryStatus', 
+                (msg) => this.batteryCallback(msg));
+
+            // Subscribe to odometry
+            this.odomSubscriber = this.rosNode.subscribe('/odom', 'nav_msgs/Odometry',
+                (msg) => this.odomCallback(msg));
+
+            // Subscribe to laser scan
+            this.laserSubscriber = this.rosNode.subscribe('/scan', 'sensor_msgs/LaserScan',
+                (msg) => this.laserCallback(msg));
+
+            this.isConnected = true;
+            this.rosMode = true;
+            console.log('TurtleBot controller initialized successfully');
+
+        } catch (error) {
+            console.warn('ROS initialization failed:', error.message);
+            console.log('Running in simulation mode...');
+            this.initializeSimulationMode();
+        }
+    }
+
+    initializeSimulationMode() {
+        this.isConnected = true;
+        this.rosMode = false;
+        
+        // Simulate battery data
+        this.batteryData = {
+            percentage: 0.75,
+            voltage: 12.5,
+            current: -0.5,
+            charge: 7500,
+            capacity: 10000,
+            design_capacity: 10000,
+            present: true,
+            timestamp: Date.now()
+        };
+
+        // Simulate odometry data
+        this.odomData = {
+            position: { x: 0, y: 0, z: 0 },
+            orientation: { x: 0, y: 0, z: 0, w: 1 },
+            linear_velocity: { x: 0, y: 0, z: 0 },
+            angular_velocity: { x: 0, y: 0, z: 0 },
+            timestamp: Date.now()
+        };
+
+        // Start simulation timers
+        this.startSimulation();
+        
+        console.log('Simulation mode initialized');
+    }
+
+    startSimulation() {
+        // Update battery data every 30 seconds
+        setInterval(() => {
+            if (this.batteryData && !this.rosMode) {
+                this.batteryData.percentage = Math.max(0.1, this.batteryData.percentage - 0.001);
+                this.batteryData.timestamp = Date.now();
+                io.emit('battery_update', this.batteryData);
+            }
+        }, 30000);
+
+        // Update odometry data when moving
+        setInterval(() => {
+            if (this.isMoving && !this.rosMode) {
+                this.odomData.position.x += this.currentTwist.linear.x * 0.1;
+                this.odomData.position.y += this.currentTwist.linear.y * 0.1;
+                this.odomData.linear_velocity = this.currentTwist.linear;
+                this.odomData.angular_velocity = this.currentTwist.angular;
+                this.odomData.timestamp = Date.now();
+                io.emit('odom_update', this.odomData);
+            }
+        }, 100);
+
+        // Simulate laser data
+        setInterval(() => {
+            if (!this.rosMode) {
+                const ranges = [];
+                for (let i = 0; i < 360; i++) {
+                    ranges.push(Math.random() * 5 + 0.5); // Random distances between 0.5-5.5m
+                }
+                
+                this.laserData = {
+                    ranges: ranges,
+                    angle_min: -Math.PI,
+                    angle_max: Math.PI,
+                    angle_increment: Math.PI / 180,
+                    time_increment: 0,
+                    scan_time: 0.1,
+                    range_min: 0.1,
+                    range_max: 6.0,
+                    timestamp: Date.now()
+                };
+                
+                io.emit('laser_update', this.laserData);
+            }
+        }, 200);
+    }
+
+    batteryCallback(msg) {
+        this.batteryData = {
+            percentage: msg.percentage,
+            voltage: msg.voltage,
+            current: msg.current,
+            charge: msg.charge,
+            capacity: msg.capacity,
+            design_capacity: msg.design_capacity,
+            present: msg.present,
+            timestamp: Date.now()
+        };
+        
+        io.emit('battery_update', this.batteryData);
+    }
+
+    odomCallback(msg) {
+        this.odomData = {
+            position: {
+                x: msg.pose.pose.position.x,
+                y: msg.pose.pose.position.y,
+                z: msg.pose.pose.position.z
+            },
+            orientation: {
+                x: msg.pose.pose.orientation.x,
+                y: msg.pose.pose.orientation.y,
+                z: msg.pose.pose.orientation.z,
+                w: msg.pose.pose.orientation.w
+            },
+            linear_velocity: {
+                x: msg.twist.twist.linear.x,
+                y: msg.twist.twist.linear.y,
+                z: msg.twist.twist.linear.z
+            },
+            angular_velocity: {
+                x: msg.twist.twist.angular.x,
+                y: msg.twist.twist.angular.y,
+                z: msg.twist.twist.angular.z
+            },
+            timestamp: Date.now()
+        };
+        
+        io.emit('odom_update', this.odomData);
+    }
+
+    laserCallback(msg) {
+        this.laserData = {
+            ranges: msg.ranges,
+            angle_min: msg.angle_min,
+            angle_max: msg.angle_max,
+            angle_increment: msg.angle_increment,
+            time_increment: msg.time_increment,
+            scan_time: msg.scan_time,
+            range_min: msg.range_min,
+            range_max: msg.range_max,
+            timestamp: Date.now()
+        };
+        
+        if (Date.now() % 100 < 50) {
+            io.emit('laser_update', this.laserData);
+        }
+    }
+
+    publishTwist(linear_x = 0, linear_y = 0, linear_z = 0, angular_x = 0, angular_y = 0, angular_z = 0) {
+        if (!this.isConnected) {
+            console.warn('Controller not connected');
+            return false;
+        }
+
+        const twist = {
+            linear: { x: linear_x, y: linear_y, z: linear_z },
+            angular: { x: angular_x, y: angular_y, z: angular_z }
+        };
+
+        if (this.rosMode && this.cmdVelPublisher) {
+            // Publish to actual ROS topic
+            this.cmdVelPublisher.publish(twist);
+        } else {
+            // Simulation mode - just log the command
+            console.log(`Movement command: linear=[${linear_x.toFixed(2)}, ${linear_y.toFixed(2)}, ${linear_z.toFixed(2)}], angular=[${angular_x.toFixed(2)}, ${angular_y.toFixed(2)}, ${angular_z.toFixed(2)}]`);
+        }
+
+        this.currentTwist = twist;
+        this.isMoving = (linear_x !== 0 || linear_y !== 0 || linear_z !== 0 || 
+                        angular_x !== 0 || angular_y !== 0 || angular_z !== 0);
+        
+        io.emit('movement_update', {
+            twist: this.currentTwist,
+            is_moving: this.isMoving
+        });
+        
+        return true;
+    }
+
+    moveForward(speed = 0.2) {
+        return this.publishTwist(speed, 0, 0, 0, 0, 0);
+    }
+
+    moveBackward(speed = 0.2) {
+        return this.publishTwist(-speed, 0, 0, 0, 0, 0);
+    }
+
+    turnLeft(angularSpeed = 0.5) {
+        return this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
+    }
+
+    turnRight(angularSpeed = 0.5) {
+        return this.publishTwist(0, 0, 0, 0, 0, -angularSpeed);
+    }
+
+    stop() {
+        return this.publishTwist(0, 0, 0, 0, 0, 0);
+    }
+
+    customMove(linear_x, linear_y = 0, linear_z = 0, angular_x = 0, angular_y = 0, angular_z = 0) {
+        return this.publishTwist(
+            parseFloat(linear_x) || 0,
+            parseFloat(linear_y) || 0,
+            parseFloat(linear_z) || 0,
+            parseFloat(angular_x) || 0,
+            parseFloat(angular_y) || 0,
+            parseFloat(angular_z) || 0
+        );
+    }
+
+    getStatus() {
+        return {
+            is_connected: this.isConnected,
+            is_moving: this.isMoving,
+            ros_mode: this.rosMode,
+            current_twist: this.currentTwist,
+            battery_available: this.batteryData !== null,
+            odometry_available: this.odomData !== null,
+            laser_available: this.laserData !== null,
+            timestamp: Date.now()
+        };
+    }
+
+    emergencyStop() {
+        console.log('EMERGENCY STOP ACTIVATED');
+        this.stop();
+        return true;
+    }
+}
+
+// Initialize TurtleBot controller
+const turtlebot = new TurtleBotController();
+
+// Authentication middleware
+function requireAuth(req, res, next) {
+    if (!req.session.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+    }
+    next();
+}
+
+// Routes
+app.get('/', (req, res) => {
+    res.send(`
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>TurtleBot Control Server</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; }
+                .status { background: #f0f0f0; padding: 20px; border-radius: 10px; margin: 20px 0; }
+                .api-list { background: #e8f4f8; padding: 20px; border-radius: 10px; }
+            </style>
+        </head>
+        <body>
+            <h1>TurtleBot Control Server</h1>
+            <div class="status">
+                <h2>Server Status</h2>
+                <p>✅ Server is running on port ${port}</p>
+                <p>🤖 Robot Mode: ${turtlebot.rosMode ? 'ROS Connected' : 'Simulation'}</p>
+                <p>🔗 Connection Status: ${turtlebot.isConnected ? 'Connected' : 'Disconnected'}</p>
+            </div>
+            
+            <div class="api-list">
+                <h2>Available API Endpoints</h2>
+                <ul>
+                    <li>POST /api/login - User authentication</li>
+                    <li>POST /api/logout - User logout</li>
+                    <li>GET /api/status - Robot status</li>
+                    <li>POST /api/move/forward - Move forward</li>
+                    <li>POST /api/move/backward - Move backward</li>
+                    <li>POST /api/move/left - Turn left</li>
+                    <li>POST /api/move/right - Turn right</li>
+                    <li>POST /api/move/stop - Stop movement</li>
+                    <li>POST /api/emergency_stop - Emergency stop</li>
+                    <li>GET /api/sensors/battery - Battery data</li>
+                    <li>GET /api/sensors/odometry - Position data</li>
+                    <li>GET /api/sensors/laser - Laser scan data</li>
+                </ul>
+            </div>
+        </body>
+        </html>
+    `);
+});
+
+app.post('/api/login', (req, res) => {
+    const { username, password } = req.body;
+    
+    if (users[username] && users[username].password === password) {
+        req.session.user = username;
+        res.json({ success: true, message: 'Login successful', user: username });
+    } else {
+        res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+});
+
+app.post('/api/logout', (req, res) => {
+    const user = req.session.user;
+    req.session.destroy((err) => {
+        if (err) {
+            return res.status(500).json({ success: false, message: 'Logout failed' });
+        }
+        turtlebot.stop();
+        res.json({ success: true, message: 'Logged out successfully' });
+    });
+});
+
+app.get('/api/status', requireAuth, (req, res) => {
+    res.json(turtlebot.getStatus());
+});
+
+// Movement API endpoints
+app.post('/api/move/forward', requireAuth, (req, res) => {
+    const speed = parseFloat(req.body.speed) || 0.2;
+    const success = turtlebot.moveForward(speed);
+    res.json({ success, action: 'move_forward', speed });
+});
+
+app.post('/api/move/backward', requireAuth, (req, res) => {
+    const speed = parseFloat(req.body.speed) || 0.2;
+    const success = turtlebot.moveBackward(speed);
+    res.json({ success, action: 'move_backward', speed });
+});
+
+app.post('/api/move/left', requireAuth, (req, res) => {
+    const angular_speed = parseFloat(req.body.angular_speed) || 0.5;
+    const success = turtlebot.turnLeft(angular_speed);
+    res.json({ success, action: 'turn_left', angular_speed });
+});
+
+app.post('/api/move/right', requireAuth, (req, res) => {
+    const angular_speed = parseFloat(req.body.angular_speed) || 0.5;
+    const success = turtlebot.turnRight(angular_speed);
+    res.json({ success, action: 'turn_right', angular_speed });
+});
+
+app.post('/api/move/stop', requireAuth, (req, res) => {
+    const success = turtlebot.stop();
+    res.json({ success, action: 'stop' });
+});
+
+app.post('/api/move/custom', requireAuth, (req, res) => {
+    const { linear_x, linear_y, linear_z, angular_x, angular_y, angular_z } = req.body;
+    const success = turtlebot.customMove(linear_x, linear_y, linear_z, angular_x, angular_y, angular_z);
+    res.json({ 
+        success, 
+        action: 'custom_move',
+        parameters: { linear_x, linear_y, linear_z, angular_x, angular_y, angular_z }
+    });
+});
+
+app.post('/api/emergency_stop', (req, res) => {
+    const success = turtlebot.emergencyStop();
+    res.json({ success, action: 'emergency_stop' });
+});
+
+// Sensor data endpoints
+app.get('/api/sensors/battery', requireAuth, (req, res) => {
+    if (turtlebot.batteryData) {
+        res.json(turtlebot.batteryData);
+    } else {
+        res.status(503).json({ error: 'Battery data not available' });
+    }
+});
+
+app.get('/api/sensors/odometry', requireAuth, (req, res) => {
+    if (turtlebot.odomData) {
+        res.json(turtlebot.odomData);
+    } else {
+        res.status(503).json({ error: 'Odometry data not available' });
+    }
+});
+
+app.get('/api/sensors/laser', requireAuth, (req, res) => {
+    if (turtlebot.laserData) {
+        res.json(turtlebot.laserData);
+    } else {
+        res.status(503).json({ error: 'Laser data not available' });
+    }
+});
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+    console.log('Client connected:', socket.id);
+
+    socket.on('move_command', (data) => {
+        const { action, parameters = {} } = data;
+        let success = false;
+        console.log("MOVING");
+
+        switch (action) {
+            case 'forward':
+                success = turtlebot.moveForward(parameters.speed || 0.2);
+                break;
+            case 'backward':
+                success = turtlebot.moveBackward(parameters.speed || 0.2);
+                break;
+            case 'left':
+                success = turtlebot.turnLeft(parameters.angular_speed || 0.5);
+                break;
+            case 'right':
+                success = turtlebot.turnRight(parameters.angular_speed || 0.5);
+                break;
+            case 'stop':
+                success = turtlebot.stop();
+                break;
+            case 'custom':
+                success = turtlebot.customMove(
+                    parameters.linear_x,
+                    parameters.linear_y,
+                    parameters.linear_z,
+                    parameters.angular_x,
+                    parameters.angular_y,
+                    parameters.angular_z
+                );
+                break;
+            default:
+                socket.emit('error', { message: 'Unknown action' });
+                return;
+        }
+
+        socket.emit('move_response', { success, action, parameters });
+    });
+
+    socket.on('emergency_stop', () => {
+        const success = turtlebot.emergencyStop();
+        io.emit('emergency_stop_activated', { success });
+    });
+
+    socket.emit('status_update', turtlebot.getStatus());
+
+    socket.on('disconnect', () => {
+        console.log('Client disconnected:', socket.id);
+    });
+});
+
+// Error handling
+process.on('SIGINT', () => {
+    console.log('Shutting down gracefully...');
+    turtlebot.stop();
+    process.exit(0);
+});
+
+process.on('uncaughtException', (error) => {
+    console.error('Uncaught Exception:', error);
+    turtlebot.stop();
+});
+
+// Start server
+server.listen(port, () => {
+    console.log(`TurtleBot backend server running on port ${port}`);
+    console.log(`Access the control interface at http://localhost:${port}`);
+    console.log(`Mode: ${turtlebot.rosMode ? 'ROS Connected' : 'Simulation'}`);
+});
+
+module.exports = { app, turtlebot };
