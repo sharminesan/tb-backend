@@ -54,82 +54,112 @@ class TurtleBotController {
         this.initializeROS();
     }
 
-    async initializeROS() {
+   async initializeROS() {
+    try {
+        // Try to import rosnodejs using require instead of dynamic import
+        let rosnodejs;
         try {
-            // Try to import rosnodejs dynamically
-            const rosnodejs = await import('rosnodejs');
-            
-            // Check if ROS environment is available
-            if (!process.env.CMAKE_PREFIX_PATH && !process.env.ROS_PACKAGE_PATH) {
-                console.warn('ROS environment not detected. Running in simulation mode.');
-                this.initializeSimulationMode();
-                return;
+            rosnodejs = require('rosnodejs');
+        } catch (requireError) {
+            console.warn('rosnodejs not found via require, trying dynamic import...');
+            rosnodejs = await import('rosnodejs');
+            // Handle ES module default export
+            if (rosnodejs.default) {
+                rosnodejs = rosnodejs.default;
             }
-
-            // Initialize ROS node
-            this.rosNode = await rosnodejs.initNode('/turtlebot_web_controller', {
-                onTheFly: true
-            });
-            
-            console.log('ROS node initialized successfully');
-
-            // Create command velocity publisher
-            this.cmdVelPublisher = this.rosNode.advertise('/cmd_vel', 'geometry_msgs/Twist');
-            console.log('Command velocity publisher created');
-
-            // Subscribe to battery status
-            this.batterySubscriber = this.rosNode.subscribe('/laptop_charge', 'smart_battery_msgs/SmartBatteryStatus', 
-                (msg) => this.batteryCallback(msg));
-
-            // Subscribe to odometry
-            this.odomSubscriber = this.rosNode.subscribe('/odom', 'nav_msgs/Odometry',
-                (msg) => this.odomCallback(msg));
-
-            // Subscribe to laser scan
-            this.laserSubscriber = this.rosNode.subscribe('/scan', 'sensor_msgs/LaserScan',
-                (msg) => this.laserCallback(msg));
-
-            this.isConnected = true;
-            this.rosMode = true;
-            console.log('TurtleBot controller initialized successfully');
-
-        } catch (error) {
-            console.warn('ROS initialization failed:', error.message);
-            console.log('Running in simulation mode...');
-            this.initializeSimulationMode();
         }
-    }
 
-    initializeSimulationMode() {
+        // Check if ROS environment is available
+        if (!process.env.ROS_MASTER_URI && !process.env.CMAKE_PREFIX_PATH && !process.env.ROS_PACKAGE_PATH) {
+            console.warn('ROS environment not detected. Running in simulation mode.');
+            this.initializeSimulationMode();
+            return;
+        }
+
+        console.log('ROS environment detected:');
+        console.log('- ROS_MASTER_URI:', process.env.ROS_MASTER_URI || 'not set');
+        console.log('- CMAKE_PREFIX_PATH:', process.env.CMAKE_PREFIX_PATH ? 'set' : 'not set');
+        console.log('- ROS_PACKAGE_PATH:', process.env.ROS_PACKAGE_PATH ? 'set' : 'not set');
+
+        // Initialize ROS node with proper error handling
+        if (typeof rosnodejs.initNode !== 'function') {
+            throw new Error('rosnodejs.initNode is not a function. Check rosnodejs installation.');
+        }
+
+        this.rosNode = await rosnodejs.initNode('/turtlebot_web_controller', {
+            onTheFly: true,
+            anonymous: false
+        });
+        
+        console.log('ROS node initialized successfully');
+
+        // Get node handle
+        const nh = rosnodejs.nh;
+
+        // Create command velocity publisher for TurtleBot1
+        this.cmdVelPublisher = nh.advertise('/cmd_vel_mux/input/navi', 'geometry_msgs/Twist', {
+            queueSize: 1,
+            latching: false
+        });
+        console.log('Command velocity publisher created on topic: /cmd_vel_mux/input/navi');
+
+        // Alternative topic for TurtleBot1 if the above doesn't work
+        // this.cmdVelPublisher = nh.advertise('/mobile_base/commands/velocity', 'geometry_msgs/Twist');
+
+        // Subscribe to battery status (adjust topic name for TurtleBot1)
+        try {
+            this.batterySubscriber = nh.subscribe('/laptop_charge', 'smart_battery_msgs/SmartBatteryStatus', 
+                (msg) => this.batteryCallback(msg), {
+                    queueSize: 1
+                });
+            console.log('Battery subscriber created');
+        } catch (batteryError) {
+            console.warn('Could not subscribe to battery topic:', batteryError.message);
+        }
+
+        // Subscribe to odometry
+        try {
+            this.odomSubscriber = nh.subscribe('/odom', 'nav_msgs/Odometry',
+                (msg) => this.odomCallback(msg), {
+                    queueSize: 1
+                });
+            console.log('Odometry subscriber created');
+        } catch (odomError) {
+            console.warn('Could not subscribe to odometry topic:', odomError.message);
+        }
+
+        // Subscribe to laser scan
+        try {
+            this.laserSubscriber = nh.subscribe('/scan', 'sensor_msgs/LaserScan',
+                (msg) => this.laserCallback(msg), {
+                    queueSize: 1
+                });
+            console.log('Laser scan subscriber created');
+        } catch (laserError) {
+            console.warn('Could not subscribe to laser topic:', laserError.message);
+        }
+
         this.isConnected = true;
-        this.rosMode = false;
-        
-        // Simulate battery data
-        this.batteryData = {
-            percentage: 0.75,
-            voltage: 12.5,
-            current: -0.5,
-            charge: 7500,
-            capacity: 10000,
-            design_capacity: 10000,
-            present: true,
-            timestamp: Date.now()
-        };
+        this.rosMode = true;
+        console.log('TurtleBot controller initialized successfully in ROS mode');
 
-        // Simulate odometry data
-        this.odomData = {
-            position: { x: 0, y: 0, z: 0 },
-            orientation: { x: 0, y: 0, z: 0, w: 1 },
-            linear_velocity: { x: 0, y: 0, z: 0 },
-            angular_velocity: { x: 0, y: 0, z: 0 },
-            timestamp: Date.now()
-        };
+        // Test the connection by publishing a zero twist
+        setTimeout(() => {
+            this.publishTwist(0, 0, 0, 0, 0, 0);
+            console.log('Test message published to cmd_vel topic');
+        }, 1000);
 
-        // Start simulation timers
-        this.startSimulation();
-        
-        console.log('Simulation mode initialized');
+    } catch (error) {
+        console.error('ROS initialization failed:', error);
+        console.log('Error details:', {
+            message: error.message,
+            stack: error.stack,
+            rosnodejsAvailable: typeof require('rosnodejs') !== 'undefined'
+        });
+        console.log('Falling back to simulation mode...');
+        this.initializeSimulationMode();
     }
+}
 
     startSimulation() {
         // Update battery data every 30 seconds
@@ -241,35 +271,49 @@ class TurtleBotController {
     }
 
     publishTwist(linear_x = 0, linear_y = 0, linear_z = 0, angular_x = 0, angular_y = 0, angular_z = 0) {
-        if (!this.isConnected) {
-            console.warn('Controller not connected');
-            return false;
+    if (!this.isConnected) {
+        console.warn('Controller not connected');
+        return false;
+    }
+
+    const twist = {
+        linear: { 
+            x: parseFloat(linear_x) || 0, 
+            y: parseFloat(linear_y) || 0, 
+            z: parseFloat(linear_z) || 0 
+        },
+        angular: { 
+            x: parseFloat(angular_x) || 0, 
+            y: parseFloat(angular_y) || 0, 
+            z: parseFloat(angular_z) || 0 
         }
+    };
 
-        const twist = {
-            linear: { x: linear_x, y: linear_y, z: linear_z },
-            angular: { x: angular_x, y: angular_y, z: angular_z }
-        };
-
-        if (this.rosMode && this.cmdVelPublisher) {
+    if (this.rosMode && this.cmdVelPublisher) {
+        try {
             // Publish to actual ROS topic
             this.cmdVelPublisher.publish(twist);
-        } else {
-            // Simulation mode - just log the command
-            console.log(`Movement command: linear=[${linear_x.toFixed(2)}, ${linear_y.toFixed(2)}, ${linear_z.toFixed(2)}], angular=[${angular_x.toFixed(2)}, ${angular_y.toFixed(2)}, ${angular_z.toFixed(2)}]`);
+            console.log(`ROS command published: linear=[${twist.linear.x.toFixed(2)}, ${twist.linear.y.toFixed(2)}, ${twist.linear.z.toFixed(2)}], angular=[${twist.angular.x.toFixed(2)}, ${twist.angular.y.toFixed(2)}, ${twist.angular.z.toFixed(2)}]`);
+        } catch (publishError) {
+            console.error('Failed to publish ROS message:', publishError);
+            return false;
         }
-
-        this.currentTwist = twist;
-        this.isMoving = (linear_x !== 0 || linear_y !== 0 || linear_z !== 0 || 
-                        angular_x !== 0 || angular_y !== 0 || angular_z !== 0);
-        
-        io.emit('movement_update', {
-            twist: this.currentTwist,
-            is_moving: this.isMoving
-        });
-        
-        return true;
+    } else {
+        // Simulation mode - just log the command
+        console.log(`Simulation command: linear=[${twist.linear.x.toFixed(2)}, ${twist.linear.y.toFixed(2)}, ${twist.linear.z.toFixed(2)}], angular=[${twist.angular.x.toFixed(2)}, ${twist.angular.y.toFixed(2)}, ${twist.angular.z.toFixed(2)}]`);
     }
+
+    this.currentTwist = twist;
+    this.isMoving = (twist.linear.x !== 0 || twist.linear.y !== 0 || twist.linear.z !== 0 || 
+                    twist.angular.x !== 0 || twist.angular.y !== 0 || twist.angular.z !== 0);
+    
+    io.emit('movement_update', {
+        twist: this.currentTwist,
+        is_moving: this.isMoving
+    });
+    
+    return true;
+}
 
     moveForward(speed = 0.2) {
         return this.publishTwist(speed, 0, 0, 0, 0, 0);
