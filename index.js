@@ -6,14 +6,23 @@ const session = require("express-session");
 const path = require("path");
 
 const app = express();
+
+const port = 4000;
+
+// Create server using your preferred method
+const server = app.listen(port, "0.0.0.0", () => {
+  console.log(`Server listening on port ${port}`);
+  console.log(`TurtleBot backend server running on port ${port}`);
+  console.log(`Access the control interface at http://0.0.0.0:${port}`);
+});
+
+// Initialize Socket.IO with the new server
 const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
   },
 });
-
-const port = 3000;
 
 // Middleware
 app.use(cors());
@@ -789,14 +798,6 @@ process.on("SIGINT", () => {
 process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);
   turtlebot.stop();
-});
-
-// Start server
-const server = app.listen(4000, "0.0.0.0", () => {
-  console.log("Server listening on port 4000");
-  console.log(`TurtleBot backend server running on port 4000`);
-  console.log(`Access the control interface at http://0.0.0.0:4000`);
-  console.log(`Mode: ${turtlebot.rosMode ? "ROS Connected" : "Simulation"}`);
 });
 
 module.exports = { app, turtlebot };
