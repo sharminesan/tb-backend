@@ -6,7 +6,6 @@ const session = require("express-session");
 const path = require("path");
 
 const app = express();
-const server = http.createServer(app);
 const io = socketIo(server, {
   cors: {
     origin: "*",
@@ -793,9 +792,10 @@ process.on("uncaughtException", (error) => {
 });
 
 // Start server
-server.listen(port, () => {
-  console.log(`TurtleBot backend server running on port ${port}`);
-  console.log(`Access the control interface at http://localhost:${port}`);
+const server = app.listen(4000, "0.0.0.0", () => {
+  console.log("Server listening on port 4000");
+  console.log(`TurtleBot backend server running on port 4000`);
+  console.log(`Access the control interface at http://0.0.0.0:4000`);
   console.log(`Mode: ${turtlebot.rosMode ? "ROS Connected" : "Simulation"}`);
 });
 
