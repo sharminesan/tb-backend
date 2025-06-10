@@ -642,7 +642,9 @@ class TurtleBotController {
                     this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
                     setTimeout(() => {
                       this.stop();
-                      io.emit("pattern_movement_complete", { pattern: "triangle" });
+                      io.emit("pattern_movement_complete", {
+                        pattern: "triangle",
+                      });
                     }, 1000);
                   }, pauseDuration);
                 }, moveDuration);
@@ -692,7 +694,8 @@ class TurtleBotController {
       // Heart curve with varying speeds for dramatic effect
       const speedMultiplier = 1 + 0.5 * Math.sin(t * 3); // Varies between 0.5 and 1.5
       const linearSpeed = scale * speedMultiplier * Math.cos(t);
-      const angularSpeed = scale * speedMultiplier * (Math.sin(t) + Math.sin(3 * t) * 0.3);
+      const angularSpeed =
+        scale * speedMultiplier * (Math.sin(t) + Math.sin(3 * t) * 0.3);
 
       this.publishTwist(linearSpeed, 0, 0, 0, 0, angularSpeed);
       step++;
@@ -948,48 +951,48 @@ app.post("/api/move/circle", requireAuth, (req, res) => {
   const radius = parseFloat(req.body.radius) || 1.0;
   const duration = parseInt(req.body.duration) || 10000;
   const clockwise = req.body.clockwise !== false; // default true
-  
+
   const success = turtlebot.moveInCircle(radius, duration, clockwise);
-  res.json({ 
-    success, 
-    action: "move_circle", 
-    parameters: { radius, duration, clockwise } 
+  res.json({
+    success,
+    action: "move_circle",
+    parameters: { radius, duration, clockwise },
   });
 });
 
 app.post("/api/move/triangle", requireAuth, (req, res) => {
   const sideLength = parseFloat(req.body.sideLength) || 1.0;
   const pauseDuration = parseInt(req.body.pauseDuration) || 500;
-  
+
   const success = turtlebot.moveInTriangle(sideLength, pauseDuration);
-  res.json({ 
-    success, 
-    action: "move_triangle", 
-    parameters: { sideLength, pauseDuration } 
+  res.json({
+    success,
+    action: "move_triangle",
+    parameters: { sideLength, pauseDuration },
   });
 });
 
 app.post("/api/move/love", requireAuth, (req, res) => {
   const size = parseFloat(req.body.size) || 1.0;
   const duration = parseInt(req.body.duration) || 20000;
-  
+
   const success = turtlebot.moveInLove(size, duration);
-  res.json({ 
-    success, 
-    action: "move_love", 
-    parameters: { size, duration } 
+  res.json({
+    success,
+    action: "move_love",
+    parameters: { size, duration },
   });
 });
 
 app.post("/api/move/diamond", requireAuth, (req, res) => {
   const sideLength = parseFloat(req.body.sideLength) || 1.0;
   const pauseDuration = parseInt(req.body.pauseDuration) || 300;
-  
+
   const success = turtlebot.moveInDiamond(sideLength, pauseDuration);
-  res.json({ 
-    success, 
-    action: "move_diamond", 
-    parameters: { sideLength, pauseDuration } 
+  res.json({
+    success,
+    action: "move_diamond",
+    parameters: { sideLength, pauseDuration },
   });
 });
 
@@ -1057,7 +1060,7 @@ io.on("connection", (socket) => {
   socket.on("move_command", (data) => {
     const { action, parameters = {} } = data;
     let success = false;
-    console.log("MOVING");
+    console.log(`ACTION: ${action}`);
 
     switch (action) {
       case "forward":
