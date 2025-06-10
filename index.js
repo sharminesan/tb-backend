@@ -533,6 +533,242 @@ class TurtleBotController {
     this.stop();
     return true;
   }
+
+  initializeSimulationMode() {
+    this.isConnected = true;
+    this.rosMode = false;
+
+    // Initialize simulation data
+    this.batteryData = {
+      percentage: 0.85,
+      voltage: 12.3,
+      current: -2.1,
+      charge: 8500,
+      capacity: 10000,
+      design_capacity: 10000,
+      present: true,
+      timestamp: Date.now(),
+    };
+
+    this.odomData = {
+      position: { x: 0, y: 0, z: 0 },
+      orientation: { x: 0, y: 0, z: 0, w: 1 },
+      linear_velocity: { x: 0, y: 0, z: 0 },
+      angular_velocity: { x: 0, y: 0, z: 0 },
+      timestamp: Date.now(),
+    };
+
+    console.log("TurtleBot controller initialized in simulation mode");
+    this.startSimulation();
+  }
+
+  // New geometric movement methods
+  async moveInCircle(radius = 1.0, duration = 10000, clockwise = true) {
+    if (!this.isConnected) {
+      console.warn("Controller not connected");
+      return false;
+    }
+
+    const circumference = 2 * Math.PI * radius;
+    const linearSpeed = circumference / (duration / 1000); // m/s
+    const angularSpeed = (2 * Math.PI) / (duration / 1000); // rad/s
+
+    console.log(
+      `Starting circle movement: radius=${radius}m, duration=${duration}ms, clockwise=${clockwise}`
+    );
+
+    // Emit movement start event
+    io.emit("pattern_movement_start", {
+      pattern: "circle",
+      radius,
+      duration,
+      clockwise,
+    });
+
+    return this.publishTwist(
+      linearSpeed,
+      0,
+      0,
+      0,
+      0,
+      clockwise ? -angularSpeed : angularSpeed
+    );
+  }
+
+  async moveInTriangle(sideLength = 1.0, pauseDuration = 500) {
+    if (!this.isConnected) {
+      console.warn("Controller not connected");
+      return false;
+    }
+
+    console.log(
+      `Starting triangle movement: side=${sideLength}m, pause=${pauseDuration}ms`
+    );
+
+    io.emit("pattern_movement_start", {
+      pattern: "triangle",
+      sideLength,
+      pauseDuration,
+    });
+
+    const speed = 0.2; // m/s
+    const moveDuration = (sideLength / speed) * 1000; // ms
+    const turnAngle = 120; // degrees
+    const angularSpeed = (turnAngle * Math.PI) / 180; // rad/s for 1 second turn
+
+    // Move forward for one side
+    this.publishTwist(speed, 0, 0, 0, 0, 0);
+
+    setTimeout(() => {
+      // Stop and turn
+      this.stop();
+      setTimeout(() => {
+        this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
+        setTimeout(() => {
+          // Move forward for second side
+          this.publishTwist(speed, 0, 0, 0, 0, 0);
+          setTimeout(() => {
+            // Stop and turn
+            this.stop();
+            setTimeout(() => {
+              this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
+              setTimeout(() => {
+                // Move forward for third side
+                this.publishTwist(speed, 0, 0, 0, 0, 0);
+                setTimeout(() => {
+                  // Stop and final turn
+                  this.stop();
+                  setTimeout(() => {
+                    this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
+                    setTimeout(() => {
+                      this.stop();
+                      io.emit("pattern_movement_complete", { pattern: "triangle" });
+                    }, 1000);
+                  }, pauseDuration);
+                }, moveDuration);
+              }, 1000);
+            }, pauseDuration);
+          }, moveDuration);
+        }, 1000);
+      }, pauseDuration);
+    }, moveDuration);
+
+    return true;
+  }
+
+  async moveInLove(size = 1.0, duration = 20000) {
+    if (!this.isConnected) {
+      console.warn("Controller not connected");
+      return false;
+    }
+
+    console.log(
+      `Starting love (heart) movement: size=${size}, duration=${duration}ms`
+    );
+
+    io.emit("pattern_movement_start", {
+      pattern: "love",
+      size,
+      duration,
+    });
+
+    // Heart shape using parametric equations with smooth curves
+    const steps = 100;
+    const stepDuration = duration / steps;
+    let step = 0;
+
+    const heartInterval = setInterval(() => {
+      if (step >= steps) {
+        this.stop();
+        io.emit("pattern_movement_complete", { pattern: "love" });
+        clearInterval(heartInterval);
+        return;
+      }
+
+      // Parametric heart equations
+      const t = (step / steps) * 2 * Math.PI;
+      const scale = size * 0.1;
+
+      // Heart curve with varying speeds for dramatic effect
+      const speedMultiplier = 1 + 0.5 * Math.sin(t * 3); // Varies between 0.5 and 1.5
+      const linearSpeed = scale * speedMultiplier * Math.cos(t);
+      const angularSpeed = scale * speedMultiplier * (Math.sin(t) + Math.sin(3 * t) * 0.3);
+
+      this.publishTwist(linearSpeed, 0, 0, 0, 0, angularSpeed);
+      step++;
+    }, stepDuration);
+
+    return true;
+  }
+
+  async moveInDiamond(sideLength = 1.0, pauseDuration = 300) {
+    if (!this.isConnected) {
+      console.warn("Controller not connected");
+      return false;
+    }
+
+    console.log(
+      `Starting diamond movement: side=${sideLength}m, pause=${pauseDuration}ms`
+    );
+
+    io.emit("pattern_movement_start", {
+      pattern: "diamond",
+      sideLength,
+      pauseDuration,
+    });
+
+    const speed = 0.25; // m/s
+    const moveDuration = (sideLength / speed) * 1000; // ms
+    const turnAngle = 90; // degrees for diamond (square rotated 45°)
+    const angularSpeed = (turnAngle * Math.PI) / 180; // rad/s for 1 second turn
+
+    let currentSide = 0;
+    const totalSides = 4;
+
+    const executeSide = () => {
+      if (currentSide >= totalSides) {
+        this.stop();
+        io.emit("pattern_movement_complete", { pattern: "diamond" });
+        return;
+      }
+
+      // Add slight speed variation for more interesting movement
+      const speedVariation = 1 + Math.sin(currentSide) * 0.2;
+      const currentSpeed = speed * speedVariation;
+
+      // Move forward
+      this.publishTwist(currentSpeed, 0, 0, 0, 0, 0);
+
+      setTimeout(() => {
+        // Stop
+        this.stop();
+
+        setTimeout(() => {
+          // Turn
+          const turnDirection = currentSide % 2 === 0 ? 1 : -1; // Alternate turn directions
+          this.publishTwist(0, 0, 0, 0, 0, angularSpeed * turnDirection);
+
+          setTimeout(() => {
+            this.stop();
+            currentSide++;
+
+            setTimeout(() => {
+              executeSide();
+            }, pauseDuration / 2);
+          }, 800);
+        }, pauseDuration);
+      }, moveDuration);
+    };
+
+    executeSide();
+    return true;
+  }
+  // Enhanced stop method that also stops pattern movements
+  stopPattern() {
+    this.stop();
+    io.emit("pattern_movement_stopped", { timestamp: Date.now() });
+    return true;
+  }
 }
 
 // Initialize TurtleBot controller
@@ -557,6 +793,7 @@ app.get("/", (req, res) => {
                 body { font-family: Arial, sans-serif; margin: 40px; }
                 .status { background: #f0f0f0; padding: 20px; border-radius: 10px; margin: 20px 0; }
                 .api-list { background: #e8f4f8; padding: 20px; border-radius: 10px; }
+                .pattern-section { background: #f8e8f8; padding: 15px; border-radius: 8px; margin: 10px 0; }
             </style>
         </head>
         <body>
@@ -574,16 +811,42 @@ app.get("/", (req, res) => {
             
             <div class="api-list">
                 <h2>Available API Endpoints</h2>
+                
+                <h3>Authentication</h3>
                 <ul>
                     <li>POST /api/login - User authentication</li>
                     <li>POST /api/logout - User logout</li>
                     <li>GET /api/status - Robot status</li>
+                </ul>
+
+                <h3>Basic Movement</h3>
+                <ul>
                     <li>POST /api/move/forward - Move forward</li>
                     <li>POST /api/move/backward - Move backward</li>
                     <li>POST /api/move/left - Turn left</li>
                     <li>POST /api/move/right - Turn right</li>
                     <li>POST /api/move/stop - Stop movement</li>
+                    <li>POST /api/move/custom - Custom movement</li>
                     <li>POST /api/emergency_stop - Emergency stop</li>
+                </ul>
+
+                <div class="pattern-section">
+                    <h3>🎨 Geometric Pattern Movement</h3>
+                    <ul>
+                        <li>POST /api/move/circle - Move in circular pattern
+                            <br><small>Parameters: radius, duration, clockwise</small></li>
+                        <li>POST /api/move/triangle - Move in triangular pattern
+                            <br><small>Parameters: sideLength, pauseDuration</small></li>
+                        <li>POST /api/move/love - Move in heart/love pattern
+                            <br><small>Parameters: size, duration</small></li>
+                        <li>POST /api/move/diamond - Move in diamond pattern
+                            <br><small>Parameters: sideLength, pauseDuration</small></li>
+                        <li>POST /api/move/stop_pattern - Stop any pattern movement</li>
+                    </ul>
+                </div>
+
+                <h3>Sensors</h3>
+                <ul>
                     <li>GET /api/sensors/battery - Battery data</li>
                     <li>GET /api/sensors/odometry - Position data</li>
                     <li>GET /api/sensors/laser - Laser scan data</li>
@@ -680,6 +943,61 @@ app.post("/api/emergency_stop", (req, res) => {
   res.json({ success, action: "emergency_stop" });
 });
 
+// Geometric movement patterns
+app.post("/api/move/circle", requireAuth, (req, res) => {
+  const radius = parseFloat(req.body.radius) || 1.0;
+  const duration = parseInt(req.body.duration) || 10000;
+  const clockwise = req.body.clockwise !== false; // default true
+  
+  const success = turtlebot.moveInCircle(radius, duration, clockwise);
+  res.json({ 
+    success, 
+    action: "move_circle", 
+    parameters: { radius, duration, clockwise } 
+  });
+});
+
+app.post("/api/move/triangle", requireAuth, (req, res) => {
+  const sideLength = parseFloat(req.body.sideLength) || 1.0;
+  const pauseDuration = parseInt(req.body.pauseDuration) || 500;
+  
+  const success = turtlebot.moveInTriangle(sideLength, pauseDuration);
+  res.json({ 
+    success, 
+    action: "move_triangle", 
+    parameters: { sideLength, pauseDuration } 
+  });
+});
+
+app.post("/api/move/love", requireAuth, (req, res) => {
+  const size = parseFloat(req.body.size) || 1.0;
+  const duration = parseInt(req.body.duration) || 20000;
+  
+  const success = turtlebot.moveInLove(size, duration);
+  res.json({ 
+    success, 
+    action: "move_love", 
+    parameters: { size, duration } 
+  });
+});
+
+app.post("/api/move/diamond", requireAuth, (req, res) => {
+  const sideLength = parseFloat(req.body.sideLength) || 1.0;
+  const pauseDuration = parseInt(req.body.pauseDuration) || 300;
+  
+  const success = turtlebot.moveInDiamond(sideLength, pauseDuration);
+  res.json({ 
+    success, 
+    action: "move_diamond", 
+    parameters: { sideLength, pauseDuration } 
+  });
+});
+
+app.post("/api/move/stop_pattern", requireAuth, (req, res) => {
+  const success = turtlebot.stopPattern();
+  res.json({ success, action: "stop_pattern" });
+});
+
 app.post("/verify-firebase-token", async (req, res) => {
   try {
     const { idToken, isNewUser } = req.body;
@@ -736,7 +1054,6 @@ app.get("/api/sensors/laser", requireAuth, (req, res) => {
 // Socket.IO connection handling
 io.on("connection", (socket) => {
   console.log("Client connected:", socket.id);
-
   socket.on("move_command", (data) => {
     const { action, parameters = {} } = data;
     let success = false;
@@ -767,6 +1084,35 @@ io.on("connection", (socket) => {
           parameters.angular_y,
           parameters.angular_z
         );
+        break;
+      // New pattern movements
+      case "circle":
+        success = turtlebot.moveInCircle(
+          parameters.radius || 1.0,
+          parameters.duration || 10000,
+          parameters.clockwise !== false
+        );
+        break;
+      case "triangle":
+        success = turtlebot.moveInTriangle(
+          parameters.sideLength || 1.0,
+          parameters.pauseDuration || 500
+        );
+        break;
+      case "love":
+        success = turtlebot.moveInLove(
+          parameters.size || 1.0,
+          parameters.duration || 20000
+        );
+        break;
+      case "diamond":
+        success = turtlebot.moveInDiamond(
+          parameters.sideLength || 1.0,
+          parameters.pauseDuration || 300
+        );
+        break;
+      case "stop_pattern":
+        success = turtlebot.stopPattern();
         break;
       default:
         socket.emit("error", { message: "Unknown action" });
