@@ -1,13 +1,16 @@
+require("dotenv").config();
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 const cors = require("cors");
 const session = require("express-session");
 const path = require("path");
+const authRoutes = require("./routes/auth");
+const { verifyToken } = require("./admin");
 
 const app = express();
 
-const port = 4000;
+const port = process.env.PORT || 4000;
 
 // Create server using your preferred method
 const server = app.listen(port, "0.0.0.0", () => {
@@ -25,7 +28,12 @@ const io = socketIo(server, {
 });
 
 // Middleware
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(
@@ -39,6 +47,9 @@ app.use(
 
 // Serve static files
 app.use(express.static(path.join(__dirname, "public")));
+
+// Routes
+app.use("/api/auth", authRoutes);
 
 // User authentication
 const users = {
@@ -777,7 +788,24 @@ class TurtleBotController {
 // Initialize TurtleBot controller
 const turtlebot = new TurtleBotController();
 
-// Authentication middleware
+// Firebase Authentication middleware
+async function authenticateFirebaseUser(req, res, next) {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+
+    const idToken = authHeader.split("Bearer ")[1];
+    const decodedToken = await verifyToken(idToken);
+    req.user = decodedToken;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid Firebase token" });
+  }
+}
+
+// Legacy authentication middleware (for backward compatibility)
 function requireAuth(req, res, next) {
   if (!req.session.user) {
     return res.status(401).json({ error: "Authentication required" });
@@ -887,36 +915,36 @@ app.get("/api/status", requireAuth, (req, res) => {
 });
 
 // Movement API endpoints
-app.post("/api/move/forward", requireAuth, (req, res) => {
+app.post("/api/move/forward", authenticateFirebaseUser, (req, res) => {
   const speed = parseFloat(req.body.speed) || 0.2;
   const success = turtlebot.moveForward(speed);
   res.json({ success, action: "move_forward", speed });
 });
 
-app.post("/api/move/backward", requireAuth, (req, res) => {
+app.post("/api/move/backward", authenticateFirebaseUser, (req, res) => {
   const speed = parseFloat(req.body.speed) || 0.2;
   const success = turtlebot.moveBackward(speed);
   res.json({ success, action: "move_backward", speed });
 });
 
-app.post("/api/move/left", requireAuth, (req, res) => {
+app.post("/api/move/left", authenticateFirebaseUser, (req, res) => {
   const angular_speed = parseFloat(req.body.angular_speed) || 0.5;
   const success = turtlebot.turnLeft(angular_speed);
   res.json({ success, action: "turn_left", angular_speed });
 });
 
-app.post("/api/move/right", requireAuth, (req, res) => {
+app.post("/api/move/right", authenticateFirebaseUser, (req, res) => {
   const angular_speed = parseFloat(req.body.angular_speed) || 0.5;
   const success = turtlebot.turnRight(angular_speed);
   res.json({ success, action: "turn_right", angular_speed });
 });
 
-app.post("/api/move/stop", requireAuth, (req, res) => {
+app.post("/api/move/stop", authenticateFirebaseUser, (req, res) => {
   const success = turtlebot.stop();
   res.json({ success, action: "stop" });
 });
 
-app.post("/api/move/custom", requireAuth, (req, res) => {
+app.post("/api/move/custom", authenticateFirebaseUser, (req, res) => {
   const { linear_x, linear_y, linear_z, angular_x, angular_y, angular_z } =
     req.body;
   const success = turtlebot.customMove(
@@ -1001,12 +1029,12 @@ app.post("/api/move/stop_pattern", requireAuth, (req, res) => {
   res.json({ success, action: "stop_pattern" });
 });
 
-app.post("/verify-firebase-token", async (req, res) => {
+app.post("/api/verify-firebase-token", async (req, res) => {
   try {
     const { idToken, isNewUser } = req.body;
 
     // Verify the ID token
-    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    const decodedToken = await verifyToken(idToken);
     const uid = decodedToken.uid;
     const email = decodedToken.email;
 
@@ -1027,6 +1055,11 @@ app.post("/verify-firebase-token", async (req, res) => {
     console.error("Token verification error:", error);
     res.status(401).json({ error: "Invalid token" });
   }
+});
+
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
 
 // Sensor data endpoints
