@@ -910,6 +910,7 @@ app.get("/", (req, res) => {
 
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body;
+  console.log(`Login attempt for user: ${username} ${password}`);
 
   if (users[username] && users[username].password === password) {
     req.session.user = username;
