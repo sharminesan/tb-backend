@@ -6,9 +6,13 @@ const cors = require("cors");
 const session = require("express-session");
 const path = require("path");
 const authRoutes = require("./routes/auth");
+const otpRoutes = require("./routes/otpRoutes");
 const { verifyToken } = require("./admin");
+const { authenticateAndVerifyEmail } = require("./middleware/auth");
+const OTPService = require("./services/otpService");
 
 const app = express();
+const otpService = new OTPService();
 
 const port = process.env.PORT || 4000;
 
@@ -50,6 +54,7 @@ app.use(express.static(path.join(__dirname, "public")));
 
 // Routes
 app.use("/api/auth", authRoutes);
+app.use("/api/otp", otpRoutes);
 
 // User authentication
 const users = {
@@ -839,18 +844,22 @@ app.get("/", (req, res) => {
                   turtlebot.isConnected ? "Connected" : "Disconnected"
                 }</p>
             </div>
-            
-            <div class="api-list">
+              <div class="api-list">
                 <h2>Available API Endpoints</h2>
                 
-                <h3>Authentication</h3>
+                <h3>🔐 Authentication & OTP Verification</h3>
                 <ul>
-                    <li>POST /api/login - User authentication</li>
-                    <li>POST /api/logout - User logout</li>
+                    <li>POST /api/auth/login - User authentication (legacy)</li>
+                    <li>POST /api/auth/logout - User logout (legacy)</li>
+                    <li>POST /api/otp/send - Send OTP to email for verification</li>
+                    <li>POST /api/otp/verify - Verify OTP code</li>
+                    <li>POST /api/otp/resend - Resend OTP code</li>
+                    <li>GET /api/otp/status - Check OTP verification status</li>
+                    <li>POST /api/verify-firebase-token - Verify Firebase authentication token</li>
                     <li>GET /api/status - Robot status</li>
                 </ul>
 
-                <h3>Basic Movement</h3>
+                <h3>🔄 Basic Movement (Requires Firebase Auth + Email OTP)</h3>
                 <ul>
                     <li>POST /api/move/forward - Move forward</li>
                     <li>POST /api/move/backward - Move backward</li>
@@ -858,11 +867,11 @@ app.get("/", (req, res) => {
                     <li>POST /api/move/right - Turn right</li>
                     <li>POST /api/move/stop - Stop movement</li>
                     <li>POST /api/move/custom - Custom movement</li>
-                    <li>POST /api/emergency_stop - Emergency stop</li>
+                    <li>POST /api/emergency_stop - Emergency stop (no auth required)</li>
                 </ul>
 
                 <div class="pattern-section">
-                    <h3>🎨 Geometric Pattern Movement</h3>
+                    <h3>🎨 Geometric Pattern Movement (Requires Firebase Auth + Email OTP)</h3>
                     <ul>
                         <li>POST /api/move/circle - Move in circular pattern
                             <br><small>Parameters: radius, duration, clockwise</small></li>
@@ -876,12 +885,23 @@ app.get("/", (req, res) => {
                     </ul>
                 </div>
 
-                <h3>Sensors</h3>
+                <h3>📊 Sensors (Requires Firebase Auth + Email OTP)</h3>
                 <ul>
                     <li>GET /api/sensors/battery - Battery data</li>
                     <li>GET /api/sensors/odometry - Position data</li>
                     <li>GET /api/sensors/laser - Laser scan data</li>
                 </ul>
+
+                <div style="background: #ffe8e8; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                    <h3>🔒 Authentication Flow</h3>
+                    <ol>
+                        <li><strong>Firebase Authentication:</strong> Authenticate with Firebase and get ID token</li>
+                        <li><strong>Email OTP:</strong> Send OTP to your email using /api/otp/send</li>
+                        <li><strong>Verify OTP:</strong> Verify the OTP code using /api/otp/verify</li>
+                        <li><strong>Use APIs:</strong> Include Firebase Bearer token in headers for all API calls</li>
+                    </ol>
+                    <p><strong>Header Format:</strong> <code>Authorization: Bearer &lt;firebase-id-token&gt;</code></p>
+                </div>
             </div>
         </body>
         </html>
@@ -899,14 +919,57 @@ app.post("/api/login", (req, res) => {
   }
 });
 
-app.post("/api/logout", (req, res) => {
-  const user = req.session.user;
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ success: false, message: "Logout failed" });
+app.post("/api/logout", async (req, res) => {
+  let userEmail = "unknown";
+
+  try {
+    // Try to get user email from Firebase token if provided
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      const idToken = authHeader.split("Bearer ")[1];
+      const decodedToken = await verifyToken(idToken);
+      userEmail = decodedToken.email || decodedToken.uid;
     }
+  } catch (error) {
+    console.warn(
+      "Could not decode Firebase token during logout:",
+      error.message
+    );
+  }
+  // Also check legacy session user
+  const sessionUser = req.session.user;
+
+  console.log(`User ${userEmail} (session: ${sessionUser}) is logging out`);
+  req.session.destroy(async (err) => {
+    if (err) {
+      console.error("Session destruction failed:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Logout failed",
+        user: userEmail,
+      });
+    }
+
+    // Reset email verification status if we have a valid email
+    if (userEmail && userEmail !== "unknown") {
+      try {
+        await otpService.resetEmailVerification(userEmail);
+      } catch (error) {
+        console.error(
+          "Error resetting email verification during logout:",
+          error
+        );
+      }
+    }
+
+    // Stop the robot on logout
     turtlebot.stop();
-    res.json({ success: true, message: "Logged out successfully" });
+
+    res.json({
+      success: true,
+      message: "Logged out successfully",
+      user: userEmail,
+    });
   });
 });
 
@@ -914,37 +977,47 @@ app.get("/api/status", requireAuth, (req, res) => {
   res.json(turtlebot.getStatus());
 });
 
-// Movement API endpoints
-app.post("/api/move/forward", authenticateFirebaseUser, (req, res) => {
+// Movement API endpoints (require email verification via OTP)
+app.post("/api/move/forward", authenticateAndVerifyEmail, (req, res) => {
   const speed = parseFloat(req.body.speed) || 0.2;
   const success = turtlebot.moveForward(speed);
-  res.json({ success, action: "move_forward", speed });
+  res.json({ success, action: "move_forward", speed, user: req.user.email });
 });
 
-app.post("/api/move/backward", authenticateFirebaseUser, (req, res) => {
+app.post("/api/move/backward", authenticateAndVerifyEmail, (req, res) => {
   const speed = parseFloat(req.body.speed) || 0.2;
   const success = turtlebot.moveBackward(speed);
-  res.json({ success, action: "move_backward", speed });
+  res.json({ success, action: "move_backward", speed, user: req.user.email });
 });
 
-app.post("/api/move/left", authenticateFirebaseUser, (req, res) => {
+app.post("/api/move/left", authenticateAndVerifyEmail, (req, res) => {
   const angular_speed = parseFloat(req.body.angular_speed) || 0.5;
   const success = turtlebot.turnLeft(angular_speed);
-  res.json({ success, action: "turn_left", angular_speed });
+  res.json({
+    success,
+    action: "turn_left",
+    angular_speed,
+    user: req.user.email,
+  });
 });
 
-app.post("/api/move/right", authenticateFirebaseUser, (req, res) => {
+app.post("/api/move/right", authenticateAndVerifyEmail, (req, res) => {
   const angular_speed = parseFloat(req.body.angular_speed) || 0.5;
   const success = turtlebot.turnRight(angular_speed);
-  res.json({ success, action: "turn_right", angular_speed });
+  res.json({
+    success,
+    action: "turn_right",
+    angular_speed,
+    user: req.user.email,
+  });
 });
 
-app.post("/api/move/stop", authenticateFirebaseUser, (req, res) => {
+app.post("/api/move/stop", authenticateAndVerifyEmail, (req, res) => {
   const success = turtlebot.stop();
-  res.json({ success, action: "stop" });
+  res.json({ success, action: "stop", user: req.user.email });
 });
 
-app.post("/api/move/custom", authenticateFirebaseUser, (req, res) => {
+app.post("/api/move/custom", authenticateAndVerifyEmail, (req, res) => {
   const { linear_x, linear_y, linear_z, angular_x, angular_y, angular_z } =
     req.body;
   const success = turtlebot.customMove(
@@ -966,6 +1039,7 @@ app.post("/api/move/custom", authenticateFirebaseUser, (req, res) => {
       angular_y,
       angular_z,
     },
+    user: req.user.email,
   });
 });
 
@@ -974,8 +1048,8 @@ app.post("/api/emergency_stop", (req, res) => {
   res.json({ success, action: "emergency_stop" });
 });
 
-// Geometric movement patterns
-app.post("/api/move/circle", requireAuth, (req, res) => {
+// Geometric movement patterns (require OTP email verification)
+app.post("/api/move/circle", authenticateAndVerifyEmail, (req, res) => {
   const radius = parseFloat(req.body.radius) || 1.0;
   const duration = parseInt(req.body.duration) || 10000;
   const clockwise = req.body.clockwise !== false; // default true
@@ -985,10 +1059,11 @@ app.post("/api/move/circle", requireAuth, (req, res) => {
     success,
     action: "move_circle",
     parameters: { radius, duration, clockwise },
+    user: req.user.email,
   });
 });
 
-app.post("/api/move/triangle", requireAuth, (req, res) => {
+app.post("/api/move/triangle", authenticateAndVerifyEmail, (req, res) => {
   const sideLength = parseFloat(req.body.sideLength) || 1.0;
   const pauseDuration = parseInt(req.body.pauseDuration) || 500;
 
@@ -997,10 +1072,11 @@ app.post("/api/move/triangle", requireAuth, (req, res) => {
     success,
     action: "move_triangle",
     parameters: { sideLength, pauseDuration },
+    user: req.user.email,
   });
 });
 
-app.post("/api/move/love", requireAuth, (req, res) => {
+app.post("/api/move/love", authenticateAndVerifyEmail, (req, res) => {
   const size = parseFloat(req.body.size) || 1.0;
   const duration = parseInt(req.body.duration) || 20000;
 
@@ -1009,10 +1085,11 @@ app.post("/api/move/love", requireAuth, (req, res) => {
     success,
     action: "move_love",
     parameters: { size, duration },
+    user: req.user.email,
   });
 });
 
-app.post("/api/move/diamond", requireAuth, (req, res) => {
+app.post("/api/move/diamond", authenticateAndVerifyEmail, (req, res) => {
   const sideLength = parseFloat(req.body.sideLength) || 1.0;
   const pauseDuration = parseInt(req.body.pauseDuration) || 300;
 
@@ -1021,12 +1098,13 @@ app.post("/api/move/diamond", requireAuth, (req, res) => {
     success,
     action: "move_diamond",
     parameters: { sideLength, pauseDuration },
+    user: req.user.email,
   });
 });
 
-app.post("/api/move/stop_pattern", requireAuth, (req, res) => {
+app.post("/api/move/stop_pattern", authenticateAndVerifyEmail, (req, res) => {
   const success = turtlebot.stopPattern();
-  res.json({ success, action: "stop_pattern" });
+  res.json({ success, action: "stop_pattern", user: req.user.email });
 });
 
 app.post("/api/verify-firebase-token", async (req, res) => {
@@ -1062,28 +1140,34 @@ app.get("/health", (req, res) => {
   res.json({ status: "OK", timestamp: new Date().toISOString() });
 });
 
-// Sensor data endpoints
-app.get("/api/sensors/battery", requireAuth, (req, res) => {
+// Sensor data endpoints (require OTP email verification)
+app.get("/api/sensors/battery", authenticateAndVerifyEmail, (req, res) => {
   if (turtlebot.batteryData) {
-    res.json(turtlebot.batteryData);
+    res.json({ ...turtlebot.batteryData, user: req.user.email });
   } else {
-    res.status(503).json({ error: "Battery data not available" });
+    res
+      .status(503)
+      .json({ error: "Battery data not available", user: req.user.email });
   }
 });
 
-app.get("/api/sensors/odometry", requireAuth, (req, res) => {
+app.get("/api/sensors/odometry", authenticateAndVerifyEmail, (req, res) => {
   if (turtlebot.odomData) {
-    res.json(turtlebot.odomData);
+    res.json({ ...turtlebot.odomData, user: req.user.email });
   } else {
-    res.status(503).json({ error: "Odometry data not available" });
+    res
+      .status(503)
+      .json({ error: "Odometry data not available", user: req.user.email });
   }
 });
 
-app.get("/api/sensors/laser", requireAuth, (req, res) => {
+app.get("/api/sensors/laser", authenticateAndVerifyEmail, (req, res) => {
   if (turtlebot.laserData) {
-    res.json(turtlebot.laserData);
+    res.json({ ...turtlebot.laserData, user: req.user.email });
   } else {
-    res.status(503).json({ error: "Laser data not available" });
+    res
+      .status(503)
+      .json({ error: "Laser data not available", user: req.user.email });
   }
 });
 
