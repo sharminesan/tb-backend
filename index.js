@@ -7,12 +7,18 @@ const session = require("express-session");
 const path = require("path");
 const authRoutes = require("./routes/auth");
 const otpRoutes = require("./routes/otpRoutes");
+const googleAuthRoutes = require("./routes/googleAuthRoutes");
 const { verifyToken } = require("./admin");
-const { authenticateAndVerifyEmail } = require("./middleware/auth");
+const {
+  authenticateAndVerifyEmail,
+  authenticateAndVerifyAll,
+} = require("./middleware/auth");
 const OTPService = require("./services/otpService");
+const GoogleAuthenticatorService = require("./services/googleAuthService");
 
 const app = express();
 const otpService = new OTPService();
+const googleAuthService = new GoogleAuthenticatorService();
 
 const port = process.env.PORT || 4000;
 
@@ -55,6 +61,7 @@ app.use(express.static(path.join(__dirname, "public")));
 // Routes
 app.use("/api/auth", authRoutes);
 app.use("/api/otp", otpRoutes);
+app.use("/api/google-auth", googleAuthRoutes);
 
 // User authentication
 const users = {
@@ -846,15 +853,20 @@ app.get("/", (req, res) => {
             </div>
               <div class="api-list">
                 <h2>Available API Endpoints</h2>
-                
-                <h3>🔐 Authentication & OTP Verification</h3>
+                  <h3>🔐 Authentication & Security</h3>
                 <ul>
                     <li>POST /api/auth/login - User authentication (legacy)</li>
-                    <li>POST /api/auth/logout - User logout (legacy)</li>
+                    <li>POST /api/auth/logout - User logout</li>
                     <li>POST /api/otp/send - Send OTP to email for verification</li>
                     <li>POST /api/otp/verify - Verify OTP code</li>
                     <li>POST /api/otp/resend - Resend OTP code</li>
                     <li>GET /api/otp/status - Check OTP verification status</li>
+                    <li>POST /api/google-auth/setup - Setup Google Authenticator (2FA)</li>
+                    <li>POST /api/google-auth/verify-setup - Complete 2FA setup</li>
+                    <li>POST /api/google-auth/verify - Verify 2FA code for login</li>
+                    <li>GET /api/google-auth/status - Check 2FA status</li>
+                    <li>POST /api/google-auth/disable - Disable 2FA</li>
+                    <li>GET /api/google-auth/backup-codes - Get backup codes</li>
                     <li>POST /api/verify-firebase-token - Verify Firebase authentication token</li>
                     <li>GET /api/status - Robot status</li>
                 </ul>
@@ -890,17 +902,26 @@ app.get("/", (req, res) => {
                     <li>GET /api/sensors/battery - Battery data</li>
                     <li>GET /api/sensors/odometry - Position data</li>
                     <li>GET /api/sensors/laser - Laser scan data</li>
-                </ul>
-
-                <div style="background: #ffe8e8; padding: 15px; border-radius: 8px; margin: 15px 0;">
-                    <h3>🔒 Authentication Flow</h3>
+                </ul>                <div style="background: #ffe8e8; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                    <h3>🔒 Enhanced Security Authentication Flow</h3>
                     <ol>
                         <li><strong>Firebase Authentication:</strong> Authenticate with Firebase and get ID token</li>
-                        <li><strong>Email OTP:</strong> Send OTP to your email using /api/otp/send</li>
-                        <li><strong>Verify OTP:</strong> Verify the OTP code using /api/otp/verify</li>
+                        <li><strong>Email OTP:</strong> Send OTP to your email using /api/otp/send and verify with /api/otp/verify</li>
+                        <li><strong>Google Authenticator (Optional):</strong> 
+                            <ul style="margin: 5px 0;">
+                                <li>Setup: /api/google-auth/setup (generates QR code)</li>
+                                <li>Enable: /api/google-auth/verify-setup (verify first code)</li>
+                                <li>Login: /api/google-auth/verify (for each session)</li>
+                            </ul>
+                        </li>
                         <li><strong>Use APIs:</strong> Include Firebase Bearer token in headers for all API calls</li>
                     </ol>
                     <p><strong>Header Format:</strong> <code>Authorization: Bearer &lt;firebase-id-token&gt;</code></p>
+                    <p><strong>Security Levels:</strong></p>
+                    <ul>
+                        <li>🔑 <strong>Basic:</strong> Firebase Auth + Email OTP</li>
+                        <li>🛡️ <strong>Enhanced:</strong> Firebase Auth + Email OTP + Google Authenticator</li>
+                    </ul>
                 </div>
             </div>
         </body>
@@ -949,15 +970,14 @@ app.post("/api/logout", async (req, res) => {
         message: "Logout failed",
         user: userEmail,
       });
-    }
-
-    // Reset email verification status if we have a valid email
+    } // Reset email verification status if we have a valid email
     if (userEmail && userEmail !== "unknown") {
       try {
         await otpService.resetEmailVerification(userEmail);
+        await googleAuthService.resetTwoFactorVerification(userEmail);
       } catch (error) {
         console.error(
-          "Error resetting email verification during logout:",
+          "Error resetting verification status during logout:",
           error
         );
       }

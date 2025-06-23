@@ -1,8 +1,10 @@
-// Enhanced Authentication Middleware
+// Enhanced Authentication Middleware with Google Authenticator support
 const admin = require("firebase-admin");
 const OTPService = require("../services/otpService");
+const GoogleAuthenticatorService = require("../services/googleAuthService");
 
 const otpService = new OTPService();
+const googleAuthService = new GoogleAuthenticatorService();
 
 // Firebase token authentication middleware
 const authenticateFirebaseToken = async (req, res, next) => {
@@ -68,6 +70,47 @@ const requireEmailVerification = async (req, res, next) => {
   }
 };
 
+// Google Authenticator (2FA) verification middleware
+const requireTwoFactorAuth = async (req, res, next) => {
+  try {
+    const email = req.user.email;
+
+    if (!email) {
+      return res.status(401).json({ error: "No email found in token" });
+    }
+
+    // Check if user has 2FA enabled
+    const has2FA = await googleAuthService.isTwoFactorEnabled(email);
+
+    if (has2FA) {
+      // Check if 2FA is verified for current session
+      const is2FAVerified = await googleAuthService.isTwoFactorVerified(email);
+
+      if (!is2FAVerified) {
+        return res.status(403).json({
+          error: "Two-factor authentication required",
+          message:
+            "Please verify your Google Authenticator code to access this resource",
+          requires2FA: true,
+          email: email,
+        });
+      }
+    }
+
+    // Add 2FA status to user object
+    req.user.twoFactorEnabled = has2FA;
+    req.user.twoFactorVerified = has2FA ? true : null;
+
+    next();
+  } catch (error) {
+    console.error("Two-factor authentication check failed:", error);
+    return res.status(500).json({
+      error: "Failed to verify two-factor authentication status",
+      details: error.message,
+    });
+  }
+};
+
 // Role-based authorization middleware
 const requireRole = (allowedRoles) => {
   return (req, res, next) => {
@@ -91,9 +134,20 @@ const authenticateAndVerifyEmail = [
   requireEmailVerification,
 ];
 
+// Enhanced middleware: Firebase auth + Email verification + 2FA
+const authenticateAndVerifyAll = [
+  authenticateFirebaseToken,
+  requireEmailVerification,
+  requireTwoFactorAuth,
+];
+
 module.exports = {
   authenticateFirebaseToken,
   requireEmailVerification,
+  requireTwoFactorAuth,
   requireRole,
   authenticateAndVerifyEmail,
+  authenticateAndVerifyAll,
+  otpService,
+  googleAuthService,
 };
