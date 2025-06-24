@@ -92,18 +92,51 @@ class TurtleBotController {
 
   async initializeROS() {
     try {
+      // Enhanced ROS environment debugging
+      console.log("=== ROS Environment Debug ===");
+      console.log("- ROS_MASTER_URI:", process.env.ROS_MASTER_URI || "not set");
+      console.log("- ROS_HOSTNAME:", process.env.ROS_HOSTNAME || "not set");
+      console.log("- ROS_IP:", process.env.ROS_IP || "not set");
+      console.log(
+        "- CMAKE_PREFIX_PATH:",
+        process.env.CMAKE_PREFIX_PATH ? "set" : "not set"
+      );
+      console.log(
+        "- ROS_PACKAGE_PATH:",
+        process.env.ROS_PACKAGE_PATH ? "set" : "not set"
+      );
+
+      // Get system network info
+      const os = require("os");
+      const networkInterfaces = os.networkInterfaces();
+      console.log("- Available network interfaces:");
+      Object.keys(networkInterfaces).forEach((name) => {
+        networkInterfaces[name].forEach((net) => {
+          if (!net.internal && net.family === "IPv4") {
+            console.log(`  ${name}: ${net.address}`);
+          }
+        });
+      });
+
       // Try to import rosnodejs using require instead of dynamic import
       let rosnodejs;
       try {
         rosnodejs = require("rosnodejs");
+        console.log("✅ rosnodejs loaded via require");
       } catch (requireError) {
         console.warn(
           "rosnodejs not found via require, trying dynamic import..."
         );
-        rosnodejs = await import("rosnodejs");
-        // Handle ES module default export
-        if (rosnodejs.default) {
-          rosnodejs = rosnodejs.default;
+        try {
+          rosnodejs = await import("rosnodejs");
+          // Handle ES module default export
+          if (rosnodejs.default) {
+            rosnodejs = rosnodejs.default;
+          }
+          console.log("✅ rosnodejs loaded via dynamic import");
+        } catch (importError) {
+          console.error("❌ Failed to load rosnodejs:", importError.message);
+          throw new Error("rosnodejs module not available");
         }
       }
 
@@ -131,42 +164,73 @@ class TurtleBotController {
         process.env.ROS_PACKAGE_PATH ? "set" : "not set"
       );
 
-      // Initialize ROS node with proper error handling
+      // Validate rosnodejs functionality
       if (typeof rosnodejs.initNode !== "function") {
         throw new Error(
           "rosnodejs.initNode is not a function. Check rosnodejs installation."
         );
       }
 
+      console.log("Testing ROS master connectivity...");
+
+      // Add delay to ensure ROS master is ready
+      console.log("Waiting for ROS master to be ready...");
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      // Initialize ROS node with proper error handling and timeout
+      console.log("Initializing ROS node...");
       this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller", {
         onTheFly: true,
         anonymous: false,
+        timeout: 30000, // 30 second timeout
       });
 
-      console.log("ROS node initialized successfully");
+      console.log("✅ ROS node initialized successfully");
+
+      // Wait for node registration
+      console.log("Waiting for node registration...");
+      await new Promise((resolve) => setTimeout(resolve, 5000));
 
       // Get node handle
       const nh = rosnodejs.nh;
+      console.log("✅ Node handle obtained");
 
-      // Create command velocity publisher for TurtleBot1
-      this.cmdVelPublisher = nh.advertise(
-        "/cmd_vel_mux/input/navi",
-        "geometry_msgs/Twist",
-        {
-          queueSize: 1,
-          latching: false,
+      // Try different cmd_vel topics for TurtleBot1
+      const cmdVelTopics = [
+        "/cmd_vel_mux/input/navi", // Primary for TurtleBot1
+        "/cmd_vel_mux/input/teleop", // Alternative for TurtleBot1
+        "/mobile_base/commands/velocity", // Kobuki base
+        "/cmd_vel", // Direct topic
+      ];
+
+      let publisherCreated = false;
+      for (const topic of cmdVelTopics) {
+        try {
+          this.cmdVelPublisher = nh.advertise(topic, "geometry_msgs/Twist", {
+            queueSize: 1,
+            latching: false,
+          });
+          console.log(
+            `✅ Command velocity publisher created on topic: ${topic}`
+          );
+          publisherCreated = true;
+          break;
+        } catch (error) {
+          console.warn(
+            `❌ Failed to create publisher on ${topic}:`,
+            error.message
+          );
         }
-      );
-      console.log(
-        "Command velocity publisher created on topic: /cmd_vel_mux/input/navi"
-      );
+      }
 
-      // Alternative topic for TurtleBot1 if the above doesn't work
-      // this.cmdVelPublisher = nh.advertise('/mobile_base/commands/velocity', 'geometry_msgs/Twist');
+      if (!publisherCreated) {
+        throw new Error(
+          "Failed to create command velocity publisher on any topic"
+        );
+      }
 
-      // Subscribe to battery status (adjust topic name for TurtleBot1)
+      // Subscribe to battery status (try different topics and message types for TurtleBot1)
       try {
-        // Try different battery topics and message types for TurtleBot1
         const batteryTopics = [
           {
             topic: "/laptop_charge",
@@ -184,18 +248,16 @@ class TurtleBotController {
               battery.topic,
               battery.msgType,
               (msg) => this.batteryCallback(msg, battery.msgType),
-              {
-                queueSize: 1,
-              }
+              { queueSize: 1 }
             );
             console.log(
-              `Battery subscriber created on topic: ${battery.topic} with type: ${battery.msgType}`
+              `✅ Battery subscriber created on topic: ${battery.topic} with type: ${battery.msgType}`
             );
             batterySubscribed = true;
             break;
           } catch (subError) {
             console.warn(
-              `Could not subscribe to ${battery.topic}:`,
+              `❌ Could not subscribe to ${battery.topic}:`,
               subError.message
             );
           }
@@ -203,12 +265,12 @@ class TurtleBotController {
 
         if (!batterySubscribed) {
           console.warn(
-            "No battery topics available. Battery monitoring disabled."
+            "⚠️ No battery topics available. Battery monitoring disabled."
           );
         }
       } catch (batteryError) {
         console.warn(
-          "Could not subscribe to any battery topic:",
+          "⚠️ Could not subscribe to any battery topic:",
           batteryError.message
         );
       }
@@ -219,14 +281,12 @@ class TurtleBotController {
           "/odom",
           "nav_msgs/Odometry",
           (msg) => this.odomCallback(msg),
-          {
-            queueSize: 1,
-          }
+          { queueSize: 1 }
         );
-        console.log("Odometry subscriber created");
+        console.log("✅ Odometry subscriber created");
       } catch (odomError) {
         console.warn(
-          "Could not subscribe to odometry topic:",
+          "⚠️ Could not subscribe to odometry topic:",
           odomError.message
         );
       }
@@ -237,32 +297,74 @@ class TurtleBotController {
           "/scan",
           "sensor_msgs/LaserScan",
           (msg) => this.laserCallback(msg),
-          {
-            queueSize: 1,
-          }
+          { queueSize: 1 }
         );
-        console.log("Laser scan subscriber created");
+        console.log("✅ Laser scan subscriber created");
       } catch (laserError) {
-        console.warn("Could not subscribe to laser topic:", laserError.message);
+        console.warn(
+          "⚠️ Could not subscribe to laser topic:",
+          laserError.message
+        );
       }
 
+      // Set connection status
       this.isConnected = true;
       this.rosMode = true;
-      console.log("TurtleBot controller initialized successfully in ROS mode");
+      console.log(
+        "🎉 TurtleBot controller initialized successfully in ROS mode"
+      );
 
       // Test the connection by publishing a zero twist
       setTimeout(() => {
-        this.publishTwist(0, 0, 0, 0, 0, 0);
-        console.log("Test message published to cmd_vel topic");
-      }, 1000);
+        try {
+          this.publishTwist(0, 0, 0, 0, 0, 0);
+          console.log("✅ Test message published to cmd_vel topic");
+        } catch (testError) {
+          console.error(
+            "❌ Failed to publish test message:",
+            testError.message
+          );
+        }
+      }, 2000);
+
+      // Additional ROS node diagnostics
+      setTimeout(() => {
+        console.log("=== ROS Node Diagnostics ===");
+        console.log("- Node name:", this.rosNode.getNodeName());
+        console.log(
+          "- Publishers:",
+          Object.keys(this.rosNode._publishers || {}).length
+        );
+        console.log(
+          "- Subscribers:",
+          Object.keys(this.rosNode._subscribers || {}).length
+        );
+        console.log(
+          "- Services:",
+          Object.keys(this.rosNode._services || {}).length
+        );
+      }, 3000);
     } catch (error) {
-      console.error("ROS initialization failed:", error);
+      console.error("❌ ROS initialization failed:", error);
       console.log("Error details:", {
         message: error.message,
-        stack: error.stack,
-        rosnodejsAvailable: typeof require("rosnodejs") !== "undefined",
+        code: error.code,
+        errno: error.errno,
+        stack: error.stack?.split("\n").slice(0, 5).join("\n"), // First 5 lines of stack
+        rosnodejsAvailable:
+          typeof require !== "undefined"
+            ? (() => {
+                try {
+                  require("rosnodejs");
+                  return true;
+                } catch (e) {
+                  return false;
+                }
+              })()
+            : false,
       });
-      console.log("Falling back to simulation mode...");
+
+      console.log("🔄 Falling back to simulation mode...");
       this.initializeSimulationMode();
     }
   }
