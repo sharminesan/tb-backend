@@ -87,6 +87,10 @@ class TurtleBotController {
     this.isMoving = false;
     this.rosMode = false; // Flag to indicate if ROS is available
 
+    // Add continuous publishing support
+    this.publishInterval = null;
+    this.publishRate = 10; // 10Hz like the Python script
+
     this.initializeROS();
   }
 
@@ -540,7 +544,6 @@ class TurtleBotController {
       io.emit("laser_update", this.laserData);
     }
   }
-
   publishTwist(
     linear_x = 0,
     linear_y = 0,
@@ -567,36 +570,7 @@ class TurtleBotController {
       },
     };
 
-    if (this.rosMode && this.cmdVelPublisher) {
-      try {
-        // Publish to actual ROS topic
-        this.cmdVelPublisher.publish(twist);
-        console.log(
-          `ROS command published: linear=[${twist.linear.x.toFixed(
-            2
-          )}, ${twist.linear.y.toFixed(2)}, ${twist.linear.z.toFixed(
-            2
-          )}], angular=[${twist.angular.x.toFixed(
-            2
-          )}, ${twist.angular.y.toFixed(2)}, ${twist.angular.z.toFixed(2)}]`
-        );
-      } catch (publishError) {
-        console.error("Failed to publish ROS message:", publishError);
-        return false;
-      }
-    } else {
-      // Simulation mode - just log the command
-      console.log(
-        `Simulation command: linear=[${twist.linear.x.toFixed(
-          2
-        )}, ${twist.linear.y.toFixed(2)}, ${twist.linear.z.toFixed(
-          2
-        )}], angular=[${twist.angular.x.toFixed(2)}, ${twist.angular.y.toFixed(
-          2
-        )}, ${twist.angular.z.toFixed(2)}]`
-      );
-    }
-
+    // Update current twist
     this.currentTwist = twist;
     this.isMoving =
       twist.linear.x !== 0 ||
@@ -606,6 +580,9 @@ class TurtleBotController {
       twist.angular.y !== 0 ||
       twist.angular.z !== 0;
 
+    // Start continuous publishing
+    this.startContinuousPublishing();
+
     io.emit("movement_update", {
       twist: this.currentTwist,
       is_moving: this.isMoving,
@@ -614,26 +591,117 @@ class TurtleBotController {
     return true;
   }
 
+  startContinuousPublishing() {
+    // Clear existing interval
+    if (this.publishInterval) {
+      clearInterval(this.publishInterval);
+    }
+
+    // Start publishing at the specified rate (like Python script)
+    this.publishInterval = setInterval(() => {
+      if (this.rosMode && this.cmdVelPublisher) {
+        try {
+          // Publish current twist continuously
+          this.cmdVelPublisher.publish(this.currentTwist);
+          console.log(
+            `ROS command published: linear=[${this.currentTwist.linear.x.toFixed(
+              2
+            )}, ${this.currentTwist.linear.y.toFixed(
+              2
+            )}, ${this.currentTwist.linear.z.toFixed(
+              2
+            )}], angular=[${this.currentTwist.angular.x.toFixed(
+              2
+            )}, ${this.currentTwist.angular.y.toFixed(
+              2
+            )}, ${this.currentTwist.angular.z.toFixed(2)}]`
+          );
+        } catch (publishError) {
+          console.error("Failed to publish ROS message:", publishError);
+        }
+      } else if (!this.rosMode) {
+        // Simulation mode - just log the command
+        console.log(
+          `Simulation command: linear=[${this.currentTwist.linear.x.toFixed(
+            2
+          )}, ${this.currentTwist.linear.y.toFixed(
+            2
+          )}, ${this.currentTwist.linear.z.toFixed(
+            2
+          )}], angular=[${this.currentTwist.angular.x.toFixed(
+            2
+          )}, ${this.currentTwist.angular.y.toFixed(
+            2
+          )}, ${this.currentTwist.angular.z.toFixed(2)}]`
+        );
+      }
+
+      // Stop publishing if not moving
+      if (!this.isMoving) {
+        clearInterval(this.publishInterval);
+        this.publishInterval = null;
+      }
+    }, 1000 / this.publishRate); // Convert rate to milliseconds
+  }
   moveForward(speed = 0.2) {
+    console.log(`Moving forward at speed: ${speed}`);
     return this.publishTwist(speed, 0, 0, 0, 0, 0);
   }
 
   moveBackward(speed = 0.2) {
+    console.log(`Moving backward at speed: ${speed}`);
     return this.publishTwist(-speed, 0, 0, 0, 0, 0);
   }
 
   turnLeft(angularSpeed = 0.5) {
+    console.log(`Turning left at angular speed: ${angularSpeed}`);
     return this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
   }
 
   turnRight(angularSpeed = 0.5) {
+    console.log(`Turning right at angular speed: ${angularSpeed}`);
     return this.publishTwist(0, 0, 0, 0, 0, -angularSpeed);
   }
 
   stop() {
-    return this.publishTwist(0, 0, 0, 0, 0, 0);
-  }
+    console.log("Stopping robot");
 
+    // Stop continuous publishing
+    if (this.publishInterval) {
+      clearInterval(this.publishInterval);
+      this.publishInterval = null;
+    }
+
+    // Publish stop command multiple times to ensure it's received
+    const stopTwist = {
+      linear: { x: 0, y: 0, z: 0 },
+      angular: { x: 0, y: 0, z: 0 },
+    };
+
+    this.currentTwist = stopTwist;
+    this.isMoving = false;
+
+    if (this.rosMode && this.cmdVelPublisher) {
+      // Send stop command multiple times to ensure it's received
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => {
+          try {
+            this.cmdVelPublisher.publish(stopTwist);
+            console.log("Stop command published");
+          } catch (error) {
+            console.error("Failed to publish stop command:", error);
+          }
+        }, i * 10); // 10ms intervals
+      }
+    }
+
+    io.emit("movement_update", {
+      twist: this.currentTwist,
+      is_moving: this.isMoving,
+    });
+
+    return true;
+  }
   customMove(
     linear_x,
     linear_y = 0,
@@ -642,6 +710,9 @@ class TurtleBotController {
     angular_y = 0,
     angular_z = 0
   ) {
+    console.log(
+      `Custom move: linear=[${linear_x}, ${linear_y}, ${linear_z}], angular=[${angular_x}, ${angular_y}, ${angular_z}]`
+    );
     return this.publishTwist(
       parseFloat(linear_x) || 0,
       parseFloat(linear_y) || 0,
@@ -650,6 +721,57 @@ class TurtleBotController {
       parseFloat(angular_y) || 0,
       parseFloat(angular_z) || 0
     );
+  }
+
+  // Enhanced square movement similar to Python script
+  async moveSquare(sideLength = 2.0, linearSpeed = 0.2, angularSpeed = 0.5) {
+    if (!this.isConnected) {
+      console.warn("Controller not connected");
+      return false;
+    }
+
+    console.log(
+      `Starting square movement: side=${sideLength}m, linear=${linearSpeed}m/s, angular=${angularSpeed}rad/s`
+    );
+
+    const moveTime = sideLength / linearSpeed; // Time to move forward
+    const turnTime = Math.PI / 2 / angularSpeed; // Time to turn 90 degrees
+
+    for (let side = 0; side < 4; side++) {
+      console.log(`Square side ${side + 1}/4`);
+
+      // Move forward
+      console.log("Moving forward...");
+      this.publishTwist(linearSpeed, 0, 0, 0, 0, 0);
+      await new Promise((resolve) => setTimeout(resolve, moveTime * 1000));
+
+      // Stop
+      console.log("Stopping...");
+      this.stop();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Turn right (90 degrees)
+      console.log("Turning right...");
+      this.publishTwist(0, 0, 0, 0, 0, -angularSpeed);
+      await new Promise((resolve) => setTimeout(resolve, turnTime * 1000));
+
+      // Stop turning
+      console.log("Stop turning...");
+      this.stop();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    console.log("Square movement completed");
+    return true;
+  }
+
+  // Cleanup method
+  cleanup() {
+    if (this.publishInterval) {
+      clearInterval(this.publishInterval);
+      this.publishInterval = null;
+    }
+    this.stop();
   }
 
   getStatus() {
@@ -698,8 +820,7 @@ class TurtleBotController {
     console.log("TurtleBot controller initialized in simulation mode");
     this.startSimulation();
   }
-
-  // New geometric movement methods
+  // Enhanced geometric movement methods with continuous publishing
   async moveInCircle(radius = 1.0, duration = 10000, clockwise = true) {
     if (!this.isConnected) {
       console.warn("Controller not connected");
@@ -713,6 +834,11 @@ class TurtleBotController {
     console.log(
       `Starting circle movement: radius=${radius}m, duration=${duration}ms, clockwise=${clockwise}`
     );
+    console.log(
+      `Calculated speeds: linear=${linearSpeed.toFixed(
+        2
+      )}m/s, angular=${angularSpeed.toFixed(2)}rad/s`
+    );
 
     // Emit movement start event
     io.emit("pattern_movement_start", {
@@ -722,7 +848,8 @@ class TurtleBotController {
       clockwise,
     });
 
-    return this.publishTwist(
+    // Start circular movement
+    this.publishTwist(
       linearSpeed,
       0,
       0,
@@ -730,6 +857,14 @@ class TurtleBotController {
       0,
       clockwise ? -angularSpeed : angularSpeed
     );
+
+    // Stop after duration
+    setTimeout(() => {
+      this.stop();
+      io.emit("pattern_movement_complete", { pattern: "circle" });
+    }, duration);
+
+    return true;
   }
 
   async moveInTriangle(sideLength = 1.0, pauseDuration = 500) {
@@ -903,7 +1038,7 @@ class TurtleBotController {
     executeSide();
     return true;
   }
-  // Enhanced stop method that also stops pattern movements
+  // Enhanced stop   that also stops pattern movements
   stopPattern() {
     this.stop();
     io.emit("pattern_movement_stopped", { timestamp: Date.now() });
@@ -1007,6 +1142,8 @@ app.get("/", (req, res) => {
                             <br><small>Parameters: size, duration</small></li>
                         <li>POST /api/move/diamond - Move in diamond pattern
                             <br><small>Parameters: sideLength, pauseDuration</small></li>
+                        <li>POST /api/move/square - Move in square pattern
+                            <br><small>Parameters: sideLength, linearSpeed, angularSpeed</small></li>
                         <li>POST /api/move/stop_pattern - Stop any pattern movement</li>
                     </ul>
                 </div>
@@ -1237,9 +1374,19 @@ app.post("/api/move/diamond", authenticateAndVerifyEmail, (req, res) => {
   });
 });
 
-app.post("/api/move/stop_pattern", authenticateAndVerifyEmail, (req, res) => {
-  const success = turtlebot.stopPattern();
-  res.json({ success, action: "stop_pattern", user: req.user.email });
+// Add square movement endpoint (require email verification via OTP)
+app.post("/api/move/square", authenticateAndVerifyEmail, (req, res) => {
+  const sideLength = parseFloat(req.body.sideLength) || 2.0;
+  const linearSpeed = parseFloat(req.body.linearSpeed) || 0.2;
+  const angularSpeed = parseFloat(req.body.angularSpeed) || 0.5;
+
+  const success = turtlebot.moveSquare(sideLength, linearSpeed, angularSpeed);
+  res.json({
+    success,
+    action: "move_square",
+    parameters: { sideLength, linearSpeed, angularSpeed },
+    user: req.user.email,
+  });
 });
 
 app.post("/api/verify-firebase-token", async (req, res) => {
@@ -1366,6 +1513,13 @@ io.on("connection", (socket) => {
           parameters.pauseDuration || 300
         );
         break;
+      case "square":
+        success = turtlebot.moveSquare(
+          parameters.sideLength || 2.0,
+          parameters.linearSpeed || 0.2,
+          parameters.angularSpeed || 0.5
+        );
+        break;
       case "stop_pattern":
         success = turtlebot.stopPattern();
         break;
@@ -1392,13 +1546,13 @@ io.on("connection", (socket) => {
 // Error handling
 process.on("SIGINT", () => {
   console.log("Shutting down gracefully...");
-  turtlebot.stop();
+  turtlebot.cleanup();
   process.exit(0);
 });
 
 process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);
-  turtlebot.stop();
+  turtlebot.cleanup();
 });
 
 module.exports = { app, turtlebot };
