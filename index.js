@@ -118,7 +118,85 @@ class TurtleBotController {
         });
       });
 
-      // Try to import rosnodejs using require instead of dynamic import
+      // Pre-test ROS master connectivity using shell command
+      console.log("🔍 Testing ROS master connectivity via shell command...");
+      const { exec } = require("child_process");
+      const testCommand = new Promise((resolve, reject) => {
+        // Use the same environment variables that your Node.js process has
+        const env = {
+          ...process.env,
+          ROS_MASTER_URI: process.env.ROS_MASTER_URI,
+          ROS_HOSTNAME: process.env.ROS_HOSTNAME,
+          ROS_IP: process.env.ROS_IP,
+        };
+
+        exec("timeout 10s rosnode list", { env }, (error, stdout, stderr) => {
+          if (error) {
+            reject(
+              new Error(
+                `ROS master connectivity test failed: ${error.message}\nStderr: ${stderr}`
+              )
+            );
+          } else {
+            console.log("✅ ROS master connectivity test passed");
+            console.log("Available ROS nodes:", stdout.trim().split("\n"));
+            resolve(stdout);
+          }
+        });
+      });
+
+      try {
+        await testCommand;
+      } catch (testError) {
+        console.error(
+          "❌ ROS master connectivity test failed:",
+          testError.message
+        );
+        throw new Error(
+          "ROS master is not accessible from Node.js environment"
+        );
+      }
+
+      // Test rostopic list as well
+      console.log("🔍 Testing rostopic connectivity...");
+      const testTopics = new Promise((resolve, reject) => {
+        const env = {
+          ...process.env,
+          ROS_MASTER_URI: process.env.ROS_MASTER_URI,
+          ROS_HOSTNAME: process.env.ROS_HOSTNAME,
+          ROS_IP: process.env.ROS_IP,
+        };
+
+        exec("timeout 10s rostopic list", { env }, (error, stdout, stderr) => {
+          if (error) {
+            reject(
+              new Error(
+                `rostopic test failed: ${error.message}\nStderr: ${stderr}`
+              )
+            );
+          } else {
+            console.log("✅ rostopic connectivity test passed");
+            console.log(
+              "Available topics:",
+              stdout.trim().split("\n").slice(0, 5).join(", "),
+              "..."
+            );
+            resolve(stdout);
+          }
+        });
+      });
+
+      try {
+        await testTopics;
+      } catch (topicError) {
+        console.error(
+          "❌ rostopic connectivity test failed:",
+          topicError.message
+        );
+        throw new Error("rostopic is not accessible from Node.js environment");
+      }
+
+      // Load rosnodejs
       let rosnodejs;
       try {
         rosnodejs = require("rosnodejs");
@@ -129,7 +207,6 @@ class TurtleBotController {
         );
         try {
           rosnodejs = await import("rosnodejs");
-          // Handle ES module default export
           if (rosnodejs.default) {
             rosnodejs = rosnodejs.default;
           }
@@ -153,16 +230,8 @@ class TurtleBotController {
         return;
       }
 
-      console.log("ROS environment detected:");
+      console.log("ROS environment detected and verified:");
       console.log("- ROS_MASTER_URI:", process.env.ROS_MASTER_URI || "not set");
-      console.log(
-        "- CMAKE_PREFIX_PATH:",
-        process.env.CMAKE_PREFIX_PATH ? "set" : "not set"
-      );
-      console.log(
-        "- ROS_PACKAGE_PATH:",
-        process.env.ROS_PACKAGE_PATH ? "set" : "not set"
-      );
 
       // Validate rosnodejs functionality
       if (typeof rosnodejs.initNode !== "function") {
@@ -171,25 +240,19 @@ class TurtleBotController {
         );
       }
 
-      console.log("Testing ROS master connectivity...");
-
-      // Add delay to ensure ROS master is ready
-      console.log("Waiting for ROS master to be ready...");
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-
-      // Initialize ROS node with proper error handling and timeout
-      console.log("Initializing ROS node...");
+      // Since shell commands work, try with a much shorter timeout for rosnodejs
+      console.log("Initializing ROS node with verified connectivity...");
       this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller", {
         onTheFly: true,
         anonymous: false,
-        timeout: 30000, // 30 second timeout
+        timeout: 10000, // Reduced to 10 seconds since we know ROS master is accessible
       });
 
       console.log("✅ ROS node initialized successfully");
 
-      // Wait for node registration
+      // Wait for node registration (shorter wait since connectivity is verified)
       console.log("Waiting for node registration...");
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Get node handle
       const nh = rosnodejs.nh;
@@ -350,7 +413,7 @@ class TurtleBotController {
         message: error.message,
         code: error.code,
         errno: error.errno,
-        stack: error.stack?.split("\n").slice(0, 5).join("\n"), // First 5 lines of stack
+        stack: error.stack?.split("\n").slice(0, 5).join("\n"),
         rosnodejsAvailable:
           typeof require !== "undefined"
             ? (() => {
