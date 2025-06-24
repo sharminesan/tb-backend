@@ -22,25 +22,116 @@ const googleAuthService = new GoogleAuthenticatorService();
 
 const port = process.env.PORT || 4000;
 
+// Get machine's IP address for network access
+function getLocalIPAddress() {
+  const interfaces = require("os").networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return "localhost";
+}
+
+const serverIP = getLocalIPAddress();
+
 // Create server using your preferred method
 const server = app.listen(port, "0.0.0.0", () => {
-  console.log(`Server listening on port ${port}`);
-  console.log(`TurtleBot backend server running on port ${port}`);
-  console.log(`Access the control interface at http://0.0.0.0:${port}`);
+  console.log(`\n🚀 TurtleBot Backend Server Started`);
+  console.log(`📍 Server listening on port ${port}`);
+  console.log(`🌐 Network Access:`);
+  console.log(`   • Local: http://localhost:${port}`);
+  console.log(`   • Network: http://${serverIP}:${port}`);
+  console.log(`\n🔗 Frontend Access URLs:`);
+  console.log(`   • Local: http://localhost:5173`);
+  console.log(`   • Network: http://${serverIP}:5173`);
+  console.log(`\n📋 Control Interface: http://${serverIP}:${port}`);
+  console.log(`🔒 CORS configured for local network access\n`);
 });
 
 // Initialize Socket.IO with the new server
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, etc.)
+      if (!origin) return callback(null, true);
+
+      // Define allowed origins
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "http://192.168.78.106:5173",
+        "http://127.0.0.1:5173",
+        process.env.FRONTEND_URL,
+      ].filter(Boolean);
+
+      // Allow any origin that matches the pattern for local network
+      const isLocalNetwork =
+        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(origin) ||
+        /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.1[6-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.2[0-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.3[0-1]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        );
+
+      if (allowedOrigins.indexOf(origin) !== -1 || isLocalNetwork) {
+        callback(null, true);
+      } else {
+        console.log("Socket.IO CORS blocked origin:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
-// Middleware
+// Middleware - Updated for network accessibility
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, etc.)
+      if (!origin) return callback(null, true);
+
+      // Define allowed origins
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "http://192.168.78.106:5173",
+        "http://127.0.0.1:5173",
+        process.env.FRONTEND_URL,
+      ].filter(Boolean); // Remove any undefined values
+
+      // Allow any origin that matches the pattern for local network
+      const isLocalNetwork =
+        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(origin) ||
+        /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.1[6-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.2[0-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.3[0-1]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        );
+
+      if (allowedOrigins.indexOf(origin) !== -1 || isLocalNetwork) {
+        callback(null, true);
+      } else {
+        console.log("CORS blocked origin:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
