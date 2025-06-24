@@ -92,6 +92,11 @@ class TurtleBotController {
 
   async initializeROS() {
     try {
+      // Force set environment variables for rosnodejs
+      process.env.ROS_MASTER_URI =
+        process.env.ROS_MASTER_URI || "http://localhost:11311";
+      process.env.ROS_HOSTNAME = process.env.ROS_HOSTNAME || "localhost";
+
       // Enhanced ROS environment debugging
       console.log("=== ROS Environment Debug ===");
       console.log("- ROS_MASTER_URI:", process.env.ROS_MASTER_URI || "not set");
@@ -122,7 +127,6 @@ class TurtleBotController {
       console.log("🔍 Testing ROS master connectivity via shell command...");
       const { exec } = require("child_process");
       const testCommand = new Promise((resolve, reject) => {
-        // Use the same environment variables that your Node.js process has
         const env = {
           ...process.env,
           ROS_MASTER_URI: process.env.ROS_MASTER_URI,
@@ -240,30 +244,71 @@ class TurtleBotController {
         );
       }
 
-      // Since shell commands work, try with a much shorter timeout for rosnodejs
+      // Try alternative initialization methods
       console.log("Initializing ROS node with verified connectivity...");
-      this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller", {
-        onTheFly: true,
-        anonymous: false,
-        timeout: 10000, // Reduced to 10 seconds since we know ROS master is accessible
-      });
+
+      // Method 1: Try with explicit rosMasterUri parameter
+      try {
+        console.log(
+          "Attempting rosnodejs initialization method 1: explicit rosMasterUri..."
+        );
+        this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller", {
+          rosMasterUri: process.env.ROS_MASTER_URI,
+          onTheFly: true,
+          anonymous: false,
+          timeout: 15000,
+        });
+        console.log("✅ Method 1 successful!");
+      } catch (method1Error) {
+        console.warn("❌ Method 1 failed:", method1Error.message);
+
+        // Method 2: Try with no options
+        try {
+          console.log(
+            "Attempting rosnodejs initialization method 2: minimal options..."
+          );
+          this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller");
+          console.log("✅ Method 2 successful!");
+        } catch (method2Error) {
+          console.warn("❌ Method 2 failed:", method2Error.message);
+
+          // Method 3: Try with different timeout and anonymous
+          try {
+            console.log(
+              "Attempting rosnodejs initialization method 3: anonymous node..."
+            );
+            this.rosNode = await rosnodejs.initNode(
+              "/turtlebot_web_controller",
+              {
+                anonymous: true,
+                timeout: 20000,
+              }
+            );
+            console.log("✅ Method 3 successful!");
+          } catch (method3Error) {
+            console.error("❌ All initialization methods failed");
+            throw method3Error;
+          }
+        }
+      }
 
       console.log("✅ ROS node initialized successfully");
 
       // Wait for node registration (shorter wait since connectivity is verified)
       console.log("Waiting for node registration...");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
       // Get node handle
       const nh = rosnodejs.nh;
       console.log("✅ Node handle obtained");
 
+      // ...rest of your existing initialization code...
       // Try different cmd_vel topics for TurtleBot1
       const cmdVelTopics = [
-        "/cmd_vel_mux/input/navi", // Primary for TurtleBot1
-        "/cmd_vel_mux/input/teleop", // Alternative for TurtleBot1
-        "/mobile_base/commands/velocity", // Kobuki base
-        "/cmd_vel", // Direct topic
+        "/cmd_vel_mux/input/navi",
+        "/cmd_vel_mux/input/teleop",
+        "/mobile_base/commands/velocity",
+        "/cmd_vel",
       ];
 
       let publisherCreated = false;
@@ -292,84 +337,6 @@ class TurtleBotController {
         );
       }
 
-      // Subscribe to battery status (try different topics and message types for TurtleBot1)
-      try {
-        const batteryTopics = [
-          {
-            topic: "/laptop_charge",
-            msgType: "smart_battery_msgs/SmartBatteryStatus",
-          },
-          { topic: "/battery_state", msgType: "sensor_msgs/BatteryState" },
-          { topic: "/diagnostics", msgType: "diagnostic_msgs/DiagnosticArray" },
-          { topic: "/power_state", msgType: "kobuki_msgs/PowerSystemEvent" },
-        ];
-
-        let batterySubscribed = false;
-        for (const battery of batteryTopics) {
-          try {
-            this.batterySubscriber = nh.subscribe(
-              battery.topic,
-              battery.msgType,
-              (msg) => this.batteryCallback(msg, battery.msgType),
-              { queueSize: 1 }
-            );
-            console.log(
-              `✅ Battery subscriber created on topic: ${battery.topic} with type: ${battery.msgType}`
-            );
-            batterySubscribed = true;
-            break;
-          } catch (subError) {
-            console.warn(
-              `❌ Could not subscribe to ${battery.topic}:`,
-              subError.message
-            );
-          }
-        }
-
-        if (!batterySubscribed) {
-          console.warn(
-            "⚠️ No battery topics available. Battery monitoring disabled."
-          );
-        }
-      } catch (batteryError) {
-        console.warn(
-          "⚠️ Could not subscribe to any battery topic:",
-          batteryError.message
-        );
-      }
-
-      // Subscribe to odometry
-      try {
-        this.odomSubscriber = nh.subscribe(
-          "/odom",
-          "nav_msgs/Odometry",
-          (msg) => this.odomCallback(msg),
-          { queueSize: 1 }
-        );
-        console.log("✅ Odometry subscriber created");
-      } catch (odomError) {
-        console.warn(
-          "⚠️ Could not subscribe to odometry topic:",
-          odomError.message
-        );
-      }
-
-      // Subscribe to laser scan
-      try {
-        this.laserSubscriber = nh.subscribe(
-          "/scan",
-          "sensor_msgs/LaserScan",
-          (msg) => this.laserCallback(msg),
-          { queueSize: 1 }
-        );
-        console.log("✅ Laser scan subscriber created");
-      } catch (laserError) {
-        console.warn(
-          "⚠️ Could not subscribe to laser topic:",
-          laserError.message
-        );
-      }
-
       // Set connection status
       this.isConnected = true;
       this.rosMode = true;
@@ -389,24 +356,6 @@ class TurtleBotController {
           );
         }
       }, 2000);
-
-      // Additional ROS node diagnostics
-      setTimeout(() => {
-        console.log("=== ROS Node Diagnostics ===");
-        console.log("- Node name:", this.rosNode.getNodeName());
-        console.log(
-          "- Publishers:",
-          Object.keys(this.rosNode._publishers || {}).length
-        );
-        console.log(
-          "- Subscribers:",
-          Object.keys(this.rosNode._subscribers || {}).length
-        );
-        console.log(
-          "- Services:",
-          Object.keys(this.rosNode._services || {}).length
-        );
-      }, 3000);
     } catch (error) {
       console.error("❌ ROS initialization failed:", error);
       console.log("Error details:", {
