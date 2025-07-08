@@ -22,25 +22,116 @@ const googleAuthService = new GoogleAuthenticatorService();
 
 const port = process.env.PORT || 4000;
 
+// Get machine's IP address for network access
+function getLocalIPAddress() {
+  const interfaces = require("os").networkInterfaces();
+  for (const name of Object.keys(interfaces)) {
+    for (const iface of interfaces[name]) {
+      if (iface.family === "IPv4" && !iface.internal) {
+        return iface.address;
+      }
+    }
+  }
+  return "localhost";
+}
+
+const serverIP = getLocalIPAddress();
+
 // Create server using your preferred method
 const server = app.listen(port, "0.0.0.0", () => {
-  console.log(`Server listening on port ${port}`);
-  console.log(`TurtleBot backend server running on port ${port}`);
-  console.log(`Access the control interface at http://0.0.0.0:${port}`);
+  console.log(`\n🚀 TurtleBot Backend Server Started`);
+  console.log(`📍 Server listening on port ${port}`);
+  console.log(`🌐 Network Access:`);
+  console.log(`   • Local: http://localhost:${port}`);
+  console.log(`   • Network: http://${serverIP}:${port}`);
+  console.log(`\n🔗 Frontend Access URLs:`);
+  console.log(`   • Local: http://localhost:5173`);
+  console.log(`   • Network: http://${serverIP}:5173`);
+  console.log(`\n📋 Control Interface: http://${serverIP}:${port}`);
+  console.log(`🔒 CORS configured for local network access\n`);
 });
 
 // Initialize Socket.IO with the new server
 const io = socketIo(server, {
   cors: {
-    origin: "*",
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, etc.)
+      if (!origin) return callback(null, true);
+
+      // Define allowed origins
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "http://192.168.78.106:5173",
+        "http://127.0.0.1:5173",
+        process.env.FRONTEND_URL,
+      ].filter(Boolean);
+
+      // Allow any origin that matches the pattern for local network
+      const isLocalNetwork =
+        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(origin) ||
+        /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.1[6-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.2[0-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.3[0-1]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        );
+
+      if (allowedOrigins.indexOf(origin) !== -1 || isLocalNetwork) {
+        callback(null, true);
+      } else {
+        console.log("Socket.IO CORS blocked origin:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
-// Middleware
+// Middleware - Updated for network accessibility
 app.use(
   cors({
-    origin: process.env.FRONTEND_URL || "http://localhost:5173",
+    origin: function (origin, callback) {
+      // Allow requests with no origin (mobile apps, etc.)
+      if (!origin) return callback(null, true);
+
+      // Define allowed origins
+      const allowedOrigins = [
+        "http://localhost:5173",
+        "http://192.168.78.106:5173",
+        "http://127.0.0.1:5173",
+        process.env.FRONTEND_URL,
+      ].filter(Boolean); // Remove any undefined values
+
+      // Allow any origin that matches the pattern for local network
+      const isLocalNetwork =
+        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(origin) ||
+        /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.1[6-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.2[0-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        ) ||
+        /^http:\/\/172\.3[0-1]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
+          origin
+        );
+
+      if (allowedOrigins.indexOf(origin) !== -1 || isLocalNetwork) {
+        callback(null, true);
+      } else {
+        console.log("CORS blocked origin:", origin);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
     credentials: true,
   })
 );
@@ -87,23 +178,141 @@ class TurtleBotController {
     this.isMoving = false;
     this.rosMode = false; // Flag to indicate if ROS is available
 
+    // Add continuous publishing support
+    this.publishInterval = null;
+    this.publishRate = 10; // 10Hz like the Python script
+
     this.initializeROS();
   }
 
   async initializeROS() {
     try {
-      // Try to import rosnodejs using require instead of dynamic import
+      // Force set environment variables for rosnodejs
+      process.env.ROS_MASTER_URI =
+        process.env.ROS_MASTER_URI || "http://localhost:11311";
+      process.env.ROS_HOSTNAME = process.env.ROS_HOSTNAME || "localhost";
+
+      // Enhanced ROS environment debugging
+      console.log("=== ROS Environment Debug ===");
+      console.log("- ROS_MASTER_URI:", process.env.ROS_MASTER_URI || "not set");
+      console.log("- ROS_HOSTNAME:", process.env.ROS_HOSTNAME || "not set");
+      console.log("- ROS_IP:", process.env.ROS_IP || "not set");
+      console.log(
+        "- CMAKE_PREFIX_PATH:",
+        process.env.CMAKE_PREFIX_PATH ? "set" : "not set"
+      );
+      console.log(
+        "- ROS_PACKAGE_PATH:",
+        process.env.ROS_PACKAGE_PATH ? "set" : "not set"
+      );
+
+      // Get system network info
+      const os = require("os");
+      const networkInterfaces = os.networkInterfaces();
+      console.log("- Available network interfaces:");
+      Object.keys(networkInterfaces).forEach((name) => {
+        networkInterfaces[name].forEach((net) => {
+          if (!net.internal && net.family === "IPv4") {
+            console.log(`  ${name}: ${net.address}`);
+          }
+        });
+      });
+
+      // Pre-test ROS master connectivity using shell command
+      console.log("🔍 Testing ROS master connectivity via shell command...");
+      const { exec } = require("child_process");
+      const testCommand = new Promise((resolve, reject) => {
+        const env = {
+          ...process.env,
+          ROS_MASTER_URI: process.env.ROS_MASTER_URI,
+          ROS_HOSTNAME: process.env.ROS_HOSTNAME,
+          ROS_IP: process.env.ROS_IP,
+        };
+
+        exec("timeout 10s rosnode list", { env }, (error, stdout, stderr) => {
+          if (error) {
+            reject(
+              new Error(
+                `ROS master connectivity test failed: ${error.message}\nStderr: ${stderr}`
+              )
+            );
+          } else {
+            console.log("✅ ROS master connectivity test passed");
+            console.log("Available ROS nodes:", stdout.trim().split("\n"));
+            resolve(stdout);
+          }
+        });
+      });
+
+      try {
+        await testCommand;
+      } catch (testError) {
+        console.error(
+          "❌ ROS master connectivity test failed:",
+          testError.message
+        );
+        throw new Error(
+          "ROS master is not accessible from Node.js environment"
+        );
+      }
+
+      // Test rostopic list as well
+      console.log("🔍 Testing rostopic connectivity...");
+      const testTopics = new Promise((resolve, reject) => {
+        const env = {
+          ...process.env,
+          ROS_MASTER_URI: process.env.ROS_MASTER_URI,
+          ROS_HOSTNAME: process.env.ROS_HOSTNAME,
+          ROS_IP: process.env.ROS_IP,
+        };
+
+        exec("timeout 10s rostopic list", { env }, (error, stdout, stderr) => {
+          if (error) {
+            reject(
+              new Error(
+                `rostopic test failed: ${error.message}\nStderr: ${stderr}`
+              )
+            );
+          } else {
+            console.log("✅ rostopic connectivity test passed");
+            console.log(
+              "Available topics:",
+              stdout.trim().split("\n").slice(0, 5).join(", "),
+              "..."
+            );
+            resolve(stdout);
+          }
+        });
+      });
+
+      try {
+        await testTopics;
+      } catch (topicError) {
+        console.error(
+          "❌ rostopic connectivity test failed:",
+          topicError.message
+        );
+        throw new Error("rostopic is not accessible from Node.js environment");
+      }
+
+      // Load rosnodejs
       let rosnodejs;
       try {
         rosnodejs = require("rosnodejs");
+        console.log("✅ rosnodejs loaded via require");
       } catch (requireError) {
         console.warn(
           "rosnodejs not found via require, trying dynamic import..."
         );
-        rosnodejs = await import("rosnodejs");
-        // Handle ES module default export
-        if (rosnodejs.default) {
-          rosnodejs = rosnodejs.default;
+        try {
+          rosnodejs = await import("rosnodejs");
+          if (rosnodejs.default) {
+            rosnodejs = rosnodejs.default;
+          }
+          console.log("✅ rosnodejs loaded via dynamic import");
+        } catch (importError) {
+          console.error("❌ Failed to load rosnodejs:", importError.message);
+          throw new Error("rosnodejs module not available");
         }
       }
 
@@ -120,149 +329,149 @@ class TurtleBotController {
         return;
       }
 
-      console.log("ROS environment detected:");
+      console.log("ROS environment detected and verified:");
       console.log("- ROS_MASTER_URI:", process.env.ROS_MASTER_URI || "not set");
-      console.log(
-        "- CMAKE_PREFIX_PATH:",
-        process.env.CMAKE_PREFIX_PATH ? "set" : "not set"
-      );
-      console.log(
-        "- ROS_PACKAGE_PATH:",
-        process.env.ROS_PACKAGE_PATH ? "set" : "not set"
-      );
 
-      // Initialize ROS node with proper error handling
+      // Validate rosnodejs functionality
       if (typeof rosnodejs.initNode !== "function") {
         throw new Error(
           "rosnodejs.initNode is not a function. Check rosnodejs installation."
         );
       }
 
-      this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller", {
-        onTheFly: true,
-        anonymous: false,
-      });
+      // Try alternative initialization methods
+      console.log("Initializing ROS node with verified connectivity...");
 
-      console.log("ROS node initialized successfully");
+      // Method 1: Try with explicit rosMasterUri parameter
+      try {
+        console.log(
+          "Attempting rosnodejs initialization method 1: explicit rosMasterUri..."
+        );
+        this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller", {
+          rosMasterUri: process.env.ROS_MASTER_URI,
+          onTheFly: true,
+          anonymous: false,
+          timeout: 15000,
+        });
+        console.log("✅ Method 1 successful!");
+      } catch (method1Error) {
+        console.warn("❌ Method 1 failed:", method1Error.message);
+
+        // Method 2: Try with no options
+        try {
+          console.log(
+            "Attempting rosnodejs initialization method 2: minimal options..."
+          );
+          this.rosNode = await rosnodejs.initNode("/turtlebot_web_controller");
+          console.log("✅ Method 2 successful!");
+        } catch (method2Error) {
+          console.warn("❌ Method 2 failed:", method2Error.message);
+
+          // Method 3: Try with different timeout and anonymous
+          try {
+            console.log(
+              "Attempting rosnodejs initialization method 3: anonymous node..."
+            );
+            this.rosNode = await rosnodejs.initNode(
+              "/turtlebot_web_controller",
+              {
+                anonymous: true,
+                timeout: 20000,
+              }
+            );
+            console.log("✅ Method 3 successful!");
+          } catch (method3Error) {
+            console.error("❌ All initialization methods failed");
+            throw method3Error;
+          }
+        }
+      }
+
+      console.log("✅ ROS node initialized successfully");
+
+      // Wait for node registration (shorter wait since connectivity is verified)
+      console.log("Waiting for node registration...");
+      await new Promise((resolve) => setTimeout(resolve, 3000));
 
       // Get node handle
       const nh = rosnodejs.nh;
+      console.log("✅ Node handle obtained");
 
-      // Create command velocity publisher for TurtleBot1
-      this.cmdVelPublisher = nh.advertise(
+      // ...rest of your existing initialization code...
+      // Try different cmd_vel topics for TurtleBot1
+      const cmdVelTopics = [
         "/cmd_vel_mux/input/navi",
-        "geometry_msgs/Twist",
-        {
-          queueSize: 1,
-          latching: false,
-        }
-      );
-      console.log(
-        "Command velocity publisher created on topic: /cmd_vel_mux/input/navi"
-      );
+        "/cmd_vel_mux/input/teleop",
+        "/mobile_base/commands/velocity",
+        "/cmd_vel",
+      ];
 
-      // Alternative topic for TurtleBot1 if the above doesn't work
-      // this.cmdVelPublisher = nh.advertise('/mobile_base/commands/velocity', 'geometry_msgs/Twist');
-
-      // Subscribe to battery status (adjust topic name for TurtleBot1)
-      try {
-        // Try different battery topics and message types for TurtleBot1
-        const batteryTopics = [
-          {
-            topic: "/laptop_charge",
-            msgType: "smart_battery_msgs/SmartBatteryStatus",
-          },
-          { topic: "/battery_state", msgType: "sensor_msgs/BatteryState" },
-          { topic: "/diagnostics", msgType: "diagnostic_msgs/DiagnosticArray" },
-          { topic: "/power_state", msgType: "kobuki_msgs/PowerSystemEvent" },
-        ];
-
-        let batterySubscribed = false;
-        for (const battery of batteryTopics) {
-          try {
-            this.batterySubscriber = nh.subscribe(
-              battery.topic,
-              battery.msgType,
-              (msg) => this.batteryCallback(msg, battery.msgType),
-              {
-                queueSize: 1,
-              }
-            );
-            console.log(
-              `Battery subscriber created on topic: ${battery.topic} with type: ${battery.msgType}`
-            );
-            batterySubscribed = true;
-            break;
-          } catch (subError) {
-            console.warn(
-              `Could not subscribe to ${battery.topic}:`,
-              subError.message
-            );
-          }
-        }
-
-        if (!batterySubscribed) {
+      let publisherCreated = false;
+      for (const topic of cmdVelTopics) {
+        try {
+          this.cmdVelPublisher = nh.advertise(topic, "geometry_msgs/Twist", {
+            queueSize: 1,
+            latching: false,
+          });
+          console.log(
+            `✅ Command velocity publisher created on topic: ${topic}`
+          );
+          publisherCreated = true;
+          break;
+        } catch (error) {
           console.warn(
-            "No battery topics available. Battery monitoring disabled."
+            `❌ Failed to create publisher on ${topic}:`,
+            error.message
           );
         }
-      } catch (batteryError) {
-        console.warn(
-          "Could not subscribe to any battery topic:",
-          batteryError.message
+      }
+
+      if (!publisherCreated) {
+        throw new Error(
+          "Failed to create command velocity publisher on any topic"
         );
       }
 
-      // Subscribe to odometry
-      try {
-        this.odomSubscriber = nh.subscribe(
-          "/odom",
-          "nav_msgs/Odometry",
-          (msg) => this.odomCallback(msg),
-          {
-            queueSize: 1,
-          }
-        );
-        console.log("Odometry subscriber created");
-      } catch (odomError) {
-        console.warn(
-          "Could not subscribe to odometry topic:",
-          odomError.message
-        );
-      }
-
-      // Subscribe to laser scan
-      try {
-        this.laserSubscriber = nh.subscribe(
-          "/scan",
-          "sensor_msgs/LaserScan",
-          (msg) => this.laserCallback(msg),
-          {
-            queueSize: 1,
-          }
-        );
-        console.log("Laser scan subscriber created");
-      } catch (laserError) {
-        console.warn("Could not subscribe to laser topic:", laserError.message);
-      }
-
+      // Set connection status
       this.isConnected = true;
       this.rosMode = true;
-      console.log("TurtleBot controller initialized successfully in ROS mode");
+      console.log(
+        "🎉 TurtleBot controller initialized successfully in ROS mode"
+      );
 
       // Test the connection by publishing a zero twist
       setTimeout(() => {
-        this.publishTwist(0, 0, 0, 0, 0, 0);
-        console.log("Test message published to cmd_vel topic");
-      }, 1000);
+        try {
+          this.publishTwist(0, 0, 0, 0, 0, 0);
+          console.log("✅ Test message published to cmd_vel topic");
+        } catch (testError) {
+          console.error(
+            "❌ Failed to publish test message:",
+            testError.message
+          );
+        }
+      }, 2000);
     } catch (error) {
-      console.error("ROS initialization failed:", error);
+      console.error("❌ ROS initialization failed:", error);
       console.log("Error details:", {
         message: error.message,
-        stack: error.stack,
-        rosnodejsAvailable: typeof require("rosnodejs") !== "undefined",
+        code: error.code,
+        errno: error.errno,
+        stack: error.stack?.split("\n").slice(0, 5).join("\n"),
+        rosnodejsAvailable:
+          typeof require !== "undefined"
+            ? (() => {
+                try {
+                  require("rosnodejs");
+                  return true;
+                } catch (e) {
+                  return false;
+                }
+              })()
+            : false,
       });
-      console.log("Falling back to simulation mode...");
+
+      console.log("🔄 Falling back to simulation mode...");
       this.initializeSimulationMode();
     }
   }
@@ -426,7 +635,6 @@ class TurtleBotController {
       io.emit("laser_update", this.laserData);
     }
   }
-
   publishTwist(
     linear_x = 0,
     linear_y = 0,
@@ -453,36 +661,7 @@ class TurtleBotController {
       },
     };
 
-    if (this.rosMode && this.cmdVelPublisher) {
-      try {
-        // Publish to actual ROS topic
-        this.cmdVelPublisher.publish(twist);
-        console.log(
-          `ROS command published: linear=[${twist.linear.x.toFixed(
-            2
-          )}, ${twist.linear.y.toFixed(2)}, ${twist.linear.z.toFixed(
-            2
-          )}], angular=[${twist.angular.x.toFixed(
-            2
-          )}, ${twist.angular.y.toFixed(2)}, ${twist.angular.z.toFixed(2)}]`
-        );
-      } catch (publishError) {
-        console.error("Failed to publish ROS message:", publishError);
-        return false;
-      }
-    } else {
-      // Simulation mode - just log the command
-      console.log(
-        `Simulation command: linear=[${twist.linear.x.toFixed(
-          2
-        )}, ${twist.linear.y.toFixed(2)}, ${twist.linear.z.toFixed(
-          2
-        )}], angular=[${twist.angular.x.toFixed(2)}, ${twist.angular.y.toFixed(
-          2
-        )}, ${twist.angular.z.toFixed(2)}]`
-      );
-    }
-
+    // Update current twist
     this.currentTwist = twist;
     this.isMoving =
       twist.linear.x !== 0 ||
@@ -492,6 +671,9 @@ class TurtleBotController {
       twist.angular.y !== 0 ||
       twist.angular.z !== 0;
 
+    // Start continuous publishing
+    this.startContinuousPublishing();
+
     io.emit("movement_update", {
       twist: this.currentTwist,
       is_moving: this.isMoving,
@@ -500,26 +682,117 @@ class TurtleBotController {
     return true;
   }
 
+  startContinuousPublishing() {
+    // Clear existing interval
+    if (this.publishInterval) {
+      clearInterval(this.publishInterval);
+    }
+
+    // Start publishing at the specified rate (like Python script)
+    this.publishInterval = setInterval(() => {
+      if (this.rosMode && this.cmdVelPublisher) {
+        try {
+          // Publish current twist continuously
+          this.cmdVelPublisher.publish(this.currentTwist);
+          console.log(
+            `ROS command published: linear=[${this.currentTwist.linear.x.toFixed(
+              2
+            )}, ${this.currentTwist.linear.y.toFixed(
+              2
+            )}, ${this.currentTwist.linear.z.toFixed(
+              2
+            )}], angular=[${this.currentTwist.angular.x.toFixed(
+              2
+            )}, ${this.currentTwist.angular.y.toFixed(
+              2
+            )}, ${this.currentTwist.angular.z.toFixed(2)}]`
+          );
+        } catch (publishError) {
+          console.error("Failed to publish ROS message:", publishError);
+        }
+      } else if (!this.rosMode) {
+        // Simulation mode - just log the command
+        console.log(
+          `Simulation command: linear=[${this.currentTwist.linear.x.toFixed(
+            2
+          )}, ${this.currentTwist.linear.y.toFixed(
+            2
+          )}, ${this.currentTwist.linear.z.toFixed(
+            2
+          )}], angular=[${this.currentTwist.angular.x.toFixed(
+            2
+          )}, ${this.currentTwist.angular.y.toFixed(
+            2
+          )}, ${this.currentTwist.angular.z.toFixed(2)}]`
+        );
+      }
+
+      // Stop publishing if not moving
+      if (!this.isMoving) {
+        clearInterval(this.publishInterval);
+        this.publishInterval = null;
+      }
+    }, 1000 / this.publishRate); // Convert rate to milliseconds
+  }
   moveForward(speed = 0.2) {
+    console.log(`Moving forward at speed: ${speed}`);
     return this.publishTwist(speed, 0, 0, 0, 0, 0);
   }
 
   moveBackward(speed = 0.2) {
+    console.log(`Moving backward at speed: ${speed}`);
     return this.publishTwist(-speed, 0, 0, 0, 0, 0);
   }
 
   turnLeft(angularSpeed = 0.5) {
+    console.log(`Turning left at angular speed: ${angularSpeed}`);
     return this.publishTwist(0, 0, 0, 0, 0, angularSpeed);
   }
 
   turnRight(angularSpeed = 0.5) {
+    console.log(`Turning right at angular speed: ${angularSpeed}`);
     return this.publishTwist(0, 0, 0, 0, 0, -angularSpeed);
   }
 
   stop() {
-    return this.publishTwist(0, 0, 0, 0, 0, 0);
-  }
+    console.log("Stopping robot");
 
+    // Stop continuous publishing
+    if (this.publishInterval) {
+      clearInterval(this.publishInterval);
+      this.publishInterval = null;
+    }
+
+    // Publish stop command multiple times to ensure it's received
+    const stopTwist = {
+      linear: { x: 0, y: 0, z: 0 },
+      angular: { x: 0, y: 0, z: 0 },
+    };
+
+    this.currentTwist = stopTwist;
+    this.isMoving = false;
+
+    if (this.rosMode && this.cmdVelPublisher) {
+      // Send stop command multiple times to ensure it's received
+      for (let i = 0; i < 5; i++) {
+        setTimeout(() => {
+          try {
+            this.cmdVelPublisher.publish(stopTwist);
+            console.log("Stop command published");
+          } catch (error) {
+            console.error("Failed to publish stop command:", error);
+          }
+        }, i * 10); // 10ms intervals
+      }
+    }
+
+    io.emit("movement_update", {
+      twist: this.currentTwist,
+      is_moving: this.isMoving,
+    });
+
+    return true;
+  }
   customMove(
     linear_x,
     linear_y = 0,
@@ -528,6 +801,9 @@ class TurtleBotController {
     angular_y = 0,
     angular_z = 0
   ) {
+    console.log(
+      `Custom move: linear=[${linear_x}, ${linear_y}, ${linear_z}], angular=[${angular_x}, ${angular_y}, ${angular_z}]`
+    );
     return this.publishTwist(
       parseFloat(linear_x) || 0,
       parseFloat(linear_y) || 0,
@@ -536,6 +812,57 @@ class TurtleBotController {
       parseFloat(angular_y) || 0,
       parseFloat(angular_z) || 0
     );
+  }
+
+  // Enhanced square movement similar to Python script
+  async moveSquare(sideLength = 2.0, linearSpeed = 0.2, angularSpeed = 0.5) {
+    if (!this.isConnected) {
+      console.warn("Controller not connected");
+      return false;
+    }
+
+    console.log(
+      `Starting square movement: side=${sideLength}m, linear=${linearSpeed}m/s, angular=${angularSpeed}rad/s`
+    );
+
+    const moveTime = sideLength / linearSpeed; // Time to move forward
+    const turnTime = Math.PI / 2 / angularSpeed; // Time to turn 90 degrees
+
+    for (let side = 0; side < 4; side++) {
+      console.log(`Square side ${side + 1}/4`);
+
+      // Move forward
+      console.log("Moving forward...");
+      this.publishTwist(linearSpeed, 0, 0, 0, 0, 0);
+      await new Promise((resolve) => setTimeout(resolve, moveTime * 1000));
+
+      // Stop
+      console.log("Stopping...");
+      this.stop();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      // Turn right (90 degrees)
+      console.log("Turning right...");
+      this.publishTwist(0, 0, 0, 0, 0, -angularSpeed);
+      await new Promise((resolve) => setTimeout(resolve, turnTime * 1000));
+
+      // Stop turning
+      console.log("Stop turning...");
+      this.stop();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+
+    console.log("Square movement completed");
+    return true;
+  }
+
+  // Cleanup method
+  cleanup() {
+    if (this.publishInterval) {
+      clearInterval(this.publishInterval);
+      this.publishInterval = null;
+    }
+    this.stop();
   }
 
   getStatus() {
@@ -584,8 +911,7 @@ class TurtleBotController {
     console.log("TurtleBot controller initialized in simulation mode");
     this.startSimulation();
   }
-
-  // New geometric movement methods
+  // Enhanced geometric movement methods with continuous publishing
   async moveInCircle(radius = 1.0, duration = 10000, clockwise = true) {
     if (!this.isConnected) {
       console.warn("Controller not connected");
@@ -599,6 +925,11 @@ class TurtleBotController {
     console.log(
       `Starting circle movement: radius=${radius}m, duration=${duration}ms, clockwise=${clockwise}`
     );
+    console.log(
+      `Calculated speeds: linear=${linearSpeed.toFixed(
+        2
+      )}m/s, angular=${angularSpeed.toFixed(2)}rad/s`
+    );
 
     // Emit movement start event
     io.emit("pattern_movement_start", {
@@ -608,7 +939,8 @@ class TurtleBotController {
       clockwise,
     });
 
-    return this.publishTwist(
+    // Start circular movement
+    this.publishTwist(
       linearSpeed,
       0,
       0,
@@ -616,6 +948,14 @@ class TurtleBotController {
       0,
       clockwise ? -angularSpeed : angularSpeed
     );
+
+    // Stop after duration
+    setTimeout(() => {
+      this.stop();
+      io.emit("pattern_movement_complete", { pattern: "circle" });
+    }, duration);
+
+    return true;
   }
 
   async moveInTriangle(sideLength = 1.0, pauseDuration = 500) {
@@ -789,7 +1129,7 @@ class TurtleBotController {
     executeSide();
     return true;
   }
-  // Enhanced stop method that also stops pattern movements
+  // Enhanced stop   that also stops pattern movements
   stopPattern() {
     this.stop();
     io.emit("pattern_movement_stopped", { timestamp: Date.now() });
@@ -893,6 +1233,8 @@ app.get("/", (req, res) => {
                             <br><small>Parameters: size, duration</small></li>
                         <li>POST /api/move/diamond - Move in diamond pattern
                             <br><small>Parameters: sideLength, pauseDuration</small></li>
+                        <li>POST /api/move/square - Move in square pattern
+                            <br><small>Parameters: sideLength, linearSpeed, angularSpeed</small></li>
                         <li>POST /api/move/stop_pattern - Stop any pattern movement</li>
                     </ul>
                 </div>
@@ -1122,9 +1464,19 @@ app.post("/api/move/diamond", authenticateAndVerifyEmail, (req, res) => {
   });
 });
 
-app.post("/api/move/stop_pattern", authenticateAndVerifyEmail, (req, res) => {
-  const success = turtlebot.stopPattern();
-  res.json({ success, action: "stop_pattern", user: req.user.email });
+// Add square movement endpoint (require email verification via OTP)
+app.post("/api/move/square", authenticateAndVerifyEmail, (req, res) => {
+  const sideLength = parseFloat(req.body.sideLength) || 2.0;
+  const linearSpeed = parseFloat(req.body.linearSpeed) || 0.2;
+  const angularSpeed = parseFloat(req.body.angularSpeed) || 0.5;
+
+  const success = turtlebot.moveSquare(sideLength, linearSpeed, angularSpeed);
+  res.json({
+    success,
+    action: "move_square",
+    parameters: { sideLength, linearSpeed, angularSpeed },
+    user: req.user.email,
+  });
 });
 
 app.post("/api/verify-firebase-token", async (req, res) => {
@@ -1251,6 +1603,13 @@ io.on("connection", (socket) => {
           parameters.pauseDuration || 300
         );
         break;
+      case "square":
+        success = turtlebot.moveSquare(
+          parameters.sideLength || 2.0,
+          parameters.linearSpeed || 0.2,
+          parameters.angularSpeed || 0.5
+        );
+        break;
       case "stop_pattern":
         success = turtlebot.stopPattern();
         break;
@@ -1277,13 +1636,13 @@ io.on("connection", (socket) => {
 // Error handling
 process.on("SIGINT", () => {
   console.log("Shutting down gracefully...");
-  turtlebot.stop();
+  turtlebot.cleanup();
   process.exit(0);
 });
 
 process.on("uncaughtException", (error) => {
   console.error("Uncaught Exception:", error);
-  turtlebot.stop();
+  turtlebot.cleanup();
 });
 
 module.exports = { app, turtlebot };
