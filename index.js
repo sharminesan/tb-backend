@@ -8,6 +8,7 @@ const path = require("path");
 const authRoutes = require("./routes/auth");
 const otpRoutes = require("./routes/otpRoutes");
 const googleAuthRoutes = require("./routes/googleAuthRoutes");
+const webcamRoutes = require("./routes/webcam");
 const { verifyToken } = require("./admin");
 const {
   authenticateAndVerifyEmail,
@@ -153,6 +154,7 @@ app.use(express.static(path.join(__dirname, "public")));
 app.use("/api/auth", authRoutes);
 app.use("/api/otp", otpRoutes);
 app.use("/api/google-auth", googleAuthRoutes);
+app.use("/api/webcam", webcamRoutes);
 
 // User authentication
 const users = {
@@ -1244,6 +1246,16 @@ app.get("/", (req, res) => {
                     <li>GET /api/sensors/battery - Battery data</li>
                     <li>GET /api/sensors/odometry - Position data</li>
                     <li>GET /api/sensors/laser - Laser scan data</li>
+                </ul>
+
+                <h3>📷 Camera & Vision (No authentication required)</h3>
+                <ul>
+                    <li>GET /api/webcam/status - Check camera availability and status</li>
+                    <li>GET /api/webcam/devices - List all available camera devices</li>
+                    <li>GET /api/webcam/stream - Live MJPEG camera stream</li>
+                    <li>POST /api/webcam/snapshot - Capture a single frame/snapshot</li>
+                    <li>GET /api/webcam/test-ffmpeg - Test FFmpeg installation</li>
+                    <li>GET /api/webcam/install-help - Get FFmpeg installation instructions</li>
                 </ul>                <div style="background: #ffe8e8; padding: 15px; border-radius: 8px; margin: 15px 0;">
                     <h3>🔒 Enhanced Security Authentication Flow</h3>
                     <ol>
@@ -1637,6 +1649,10 @@ io.on("connection", (socket) => {
 process.on("SIGINT", () => {
   console.log("Shutting down gracefully...");
   turtlebot.cleanup();
+  // Stop any active camera streams
+  if (require('./routes/webcam').stopCameraStream) {
+    require('./routes/webcam').stopCameraStream();
+  }
   process.exit(0);
 });
 
