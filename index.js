@@ -54,87 +54,29 @@ const server = app.listen(port, "0.0.0.0", () => {
 // Initialize Socket.IO with the new server
 const io = socketIo(server, {
   cors: {
-    origin: function (origin, callback) {
-      // Allow requests with no origin (mobile apps, etc.)
-      if (!origin) return callback(null, true);
-
-      // Define allowed origins
-      const allowedOrigins = [
-        "http://localhost:5173",
-        "http://192.168.78.106:5173",
-        "http://127.0.0.1:5173",
-        process.env.FRONTEND_URL,
-      ].filter(Boolean);
-
-      // Allow any origin that matches the pattern for local network
-      const isLocalNetwork =
-        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(origin) ||
-        /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        ) ||
-        /^http:\/\/172\.1[6-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        ) ||
-        /^http:\/\/172\.2[0-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        ) ||
-        /^http:\/\/172\.3[0-1]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        );
-
-      if (allowedOrigins.indexOf(origin) !== -1 || isLocalNetwork) {
-        callback(null, true);
-      } else {
-        console.log("Socket.IO CORS blocked origin:", origin);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
+    origin: true, // Allow all origins for development
     methods: ["GET", "POST"],
     credentials: true,
   },
 });
 
-// Middleware - Updated for network accessibility
+// Middleware - Updated for development (allow all origins)
 app.use(
   cors({
-    origin: function (origin, callback) {
-      // Allow requests with no origin (mobile apps, etc.)
-      if (!origin) return callback(null, true);
-
-      // Define allowed origins
-      const allowedOrigins = [
-        "http://localhost:5173",
-        "http://192.168.78.106:5173",
-        "http://127.0.0.1:5173",
-        process.env.FRONTEND_URL,
-      ].filter(Boolean); // Remove any undefined values
-
-      // Allow any origin that matches the pattern for local network
-      const isLocalNetwork =
-        /^http:\/\/192\.168\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(origin) ||
-        /^http:\/\/10\.\d{1,3}\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        ) ||
-        /^http:\/\/172\.1[6-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        ) ||
-        /^http:\/\/172\.2[0-9]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        ) ||
-        /^http:\/\/172\.3[0-1]\.\d{1,3}\.\d{1,3}:(5173|3000|8080)$/.test(
-          origin
-        );
-
-      if (allowedOrigins.indexOf(origin) !== -1 || isLocalNetwork) {
-        callback(null, true);
-      } else {
-        console.log("CORS blocked origin:", origin);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
+    origin: true, // Allow all origins for development
     credentials: true,
   })
 );
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(
+    `${new Date().toISOString()} - ${req.method} ${req.url} - Origin: ${
+      req.headers.origin || "none"
+    }`
+  );
+  next();
+});
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(
