@@ -1213,6 +1213,10 @@ app.get("/", (req, res) => {
     `);
 });
 
+app.get("/api/health", (req, res) => {
+  res.status(200).json({ status: "ok" });
+});
+
 app.post("/api/login", (req, res) => {
   const { username, password } = req.body;
 
