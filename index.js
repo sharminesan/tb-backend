@@ -8,6 +8,7 @@ const path = require("path");
 const authRoutes = require("./routes/auth");
 const otpRoutes = require("./routes/otpRoutes");
 const googleAuthRoutes = require("./routes/googleAuthRoutes");
+const webcamRoutes = require("./routes/webcamRoutes");
 const { verifyToken } = require("./admin");
 const {
   authenticateAndVerifyEmail,
@@ -95,6 +96,7 @@ app.use(express.static(path.join(__dirname, "public")));
 app.use("/api/auth", authRoutes);
 app.use("/api/otp", otpRoutes);
 app.use("/api/google-auth", googleAuthRoutes);
+app.use("/api/webcam", webcamRoutes);
 
 // User authentication
 const users = {
@@ -1186,7 +1188,19 @@ app.get("/", (req, res) => {
                     <li>GET /api/sensors/battery - Battery data</li>
                     <li>GET /api/sensors/odometry - Position data</li>
                     <li>GET /api/sensors/laser - Laser scan data</li>
-                </ul>                <div style="background: #ffe8e8; padding: 15px; border-radius: 8px; margin: 15px 0;">
+                </ul>
+
+                <div class="pattern-section">
+                    <h3>📷 Webcam (Requires Firebase Auth + Email OTP)</h3>
+                    <ul>
+                        <li>GET /api/webcam/status - Check webcam status and configuration</li>
+                        <li>GET /api/webcam/capture - Capture single image from webcam</li>
+                        <li>GET /api/webcam/stream - Live webcam stream (MJPEG)</li>
+                        <li>POST /api/webcam/test - Test webcam functionality</li>
+                        <li>POST /api/webcam/reinitialize - Reinitialize webcam</li>
+                        <li>GET /api/webcam/devices - List available camera devices</li>
+                    </ul>
+                </div>                <div style="background: #ffe8e8; padding: 15px; border-radius: 8px; margin: 15px 0;">
                     <h3>🔒 Enhanced Security Authentication Flow</h3>
                     <ol>
                         <li><strong>Firebase Authentication:</strong> Authenticate with Firebase and get ID token</li>
