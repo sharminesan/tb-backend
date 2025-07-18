@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Webcam Viewer</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+      }
+      .container {
+        background: rgba(255, 255, 255, 0.95);
+        padding: 30px;
+        border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+        backdrop-filter: blur(10px);
+      }
+      h1 {
+        text-align: center;
+        color: #333;
+        margin-bottom: 30px;
+        font-size: 2.5em;
+      }
+      .video-container {
+        text-align: center;
+        margin: 30px 0;
+        background: #000;
+        border-radius: 10px;
+        overflow: hidden;
+        position: relative;
+        min-height: 400px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #viewer {
+        max-width: 100%;
+        max-height: 600px;
+        border-radius: 10px;
+        box-shadow: 0 5px 20px rgba(0, 0, 0, 0.3);
+      }
+      .no-stream {
+        color: #666;
+        font-size: 20px;
+        padding: 60px 20px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+        backdrop-filter: blur(5px);
+      }
+      .controls {
+        display: flex;
+        justify-content: center;
+        gap: 15px;
+        margin: 30px 0;
+        flex-wrap: wrap;
+      }
+      button {
+        background: linear-gradient(45deg, #2196f3, #1976d2);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 25px;
+        cursor: pointer;
+        font-size: 16px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+      }
+      button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(33, 150, 243, 0.4);
+      }
+      button:disabled {
+        background: #cccccc;
+        cursor: not-allowed;
+        transform: none;
+        box-shadow: none;
+      }
+      .status {
+        margin: 20px 0;
+        padding: 15px;
+        border-radius: 10px;
+        font-weight: bold;
+        text-align: center;
+        backdrop-filter: blur(5px);
+      }
+      .status.success {
+        background: rgba(212, 237, 218, 0.9);
+        color: #155724;
+      }
+      .status.error {
+        background: rgba(248, 215, 218, 0.9);
+        color: #721c24;
+      }
+      .status.info {
+        background: rgba(209, 236, 241, 0.9);
+        color: #0c5460;
+      }
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 15px;
+        margin: 30px 0;
+      }
+      .stat-item {
+        text-align: center;
+        padding: 20px;
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 10px;
+        backdrop-filter: blur(5px);
+        box-shadow: 0 3px 10px rgba(0, 0, 0, 0.1);
+      }
+      .stat-label {
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 8px;
+        text-transform: uppercase;
+      }
+      .stat-value {
+        font-size: 24px;
+        font-weight: bold;
+        color: #333;
+      }
+      .viewer-controls {
+        display: flex;
+        justify-content: center;
+        gap: 20px;
+        margin: 20px 0;
+        flex-wrap: wrap;
+      }
+      .viewer-control {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: rgba(255, 255, 255, 0.7);
+        padding: 10px 15px;
+        border-radius: 20px;
+        backdrop-filter: blur(5px);
+      }
+      .viewer-control label {
+        font-weight: bold;
+        color: #333;
+      }
+      .viewer-control input[type="checkbox"] {
+        transform: scale(1.2);
+      }
+      .live-indicator {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        padding: 8px 12px;
+        background: rgba(220, 53, 69, 0.9);
+        color: white;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        display: none;
+      }
+      .live-indicator.active {
+        display: block;
+        background: rgba(40, 167, 69, 0.9);
+        animation: pulse 1.5s ease-in-out infinite alternate;
+      }
+      @keyframes pulse {
+        from {
+          opacity: 0.7;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+      .quality-info {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        padding: 5px 10px;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        border-radius: 10px;
+        font-size: 11px;
+        display: none;
+      }
+      .quality-info.active {
+        display: block;
+      }
+      .debug-panel {
+        margin: 30px 0;
+        padding: 20px;
+        background: rgba(248, 249, 250, 0.9);
+        border-radius: 10px;
+        backdrop-filter: blur(5px);
+      }
+      .debug-log {
+        max-height: 150px;
+        overflow-y: auto;
+        font-family: monospace;
+        font-size: 11px;
+        color: #495057;
+      }
+      .fps-display {
+        position: absolute;
+        bottom: 10px;
+        left: 10px;
+        padding: 5px 10px;
+        background: rgba(0, 0, 0, 0.7);
+        color: white;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: bold;
+        display: none;
+      }
+      .fps-display.active {
+        display: block;
+      }
+      .viewer-list {
+        margin: 20px 0;
+        padding: 15px;
+        background: rgba(255, 255, 255, 0.6);
+        border-radius: 10px;
+        backdrop-filter: blur(5px);
+      }
+      .viewer-list h3 {
+        margin-top: 0;
+        color: #333;
+      }
+      .viewer-item {
+        padding: 8px 12px;
+        margin: 5px 0;
+        background: rgba(255, 255, 255, 0.7);
+        border-radius: 5px;
+        font-size: 12px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>📺 Webcam Viewer</h1>
+
+      <div class="video-container">
+        <div id="liveIndicator" class="live-indicator">🔴 LIVE</div>
+        <div id="fpsDisplay" class="fps-display">0 FPS</div>
+        <div id="qualityInfo" class="quality-info">Quality: Unknown</div>
+        <img id="viewer" style="display: none" alt="Webcam Stream" />
+        <div id="noStream" class="no-stream">
+          📡 Waiting for stream...<br />
+          <small>Make sure the transmitter is running and broadcasting</small>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="connectBtn">🔗 Connect</button>
+        <button id="disconnectBtn" disabled>🔌 Disconnect</button>
+        <button id="fullscreenBtn" disabled>🔍 Fullscreen</button>
+        <button id="snapshotBtn" disabled>📸 Snapshot</button>
+      </div>
+
+      <div class="viewer-controls">
+        <div class="viewer-control">
+          <label>Show FPS:</label>
+          <input type="checkbox" id="showFpsCheck" />
+        </div>
+        <div class="viewer-control">
+          <label>Show Quality:</label>
+          <input type="checkbox" id="showQualityCheck" />
+        </div>
+        <div class="viewer-control">
+          <label>Auto-reconnect:</label>
+          <input type="checkbox" id="autoReconnectCheck" checked />
+        </div>
+      </div>
+
+      <div class="stats">
+        <div class="stat-item">
+          <div class="stat-label">Connection</div>
+          <div class="stat-value" id="connectionStatus">Disconnected</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Frames Received</div>
+          <div class="stat-value" id="framesReceived">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Current FPS</div>
+          <div class="stat-value" id="currentFps">0</div>
+        </div>
+        <div class="stat-item">
+          <div class="stat-label">Data Rate</div>
+          <div class="stat-value" id="dataRate">0 KB/s</div>
+        </div>
+      </div>
+
+      <div id="statusDiv"></div>
+
+      <div class="viewer-list">
+        <h3>📊 Connection Info</h3>
+        <div id="connectionInfo">
+          <div class="viewer-item">Status: Waiting for connection...</div>
+        </div>
+      </div>
+
+      <div class="debug-panel">
+        <h3>🔧 Debug Information</h3>
+        <div id="debugLog" class="debug-log"></div>
+      </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+      const socket = io();
+
+      // DOM elements
+      const viewer = document.getElementById("viewer");
+      const noStream = document.getElementById("noStream");
+      const connectBtn = document.getElementById("connectBtn");
+      const disconnectBtn = document.getElementById("disconnectBtn");
+      const fullscreenBtn = document.getElementById("fullscreenBtn");
+      const snapshotBtn = document.getElementById("snapshotBtn");
+      const showFpsCheck = document.getElementById("showFpsCheck");
+      const showQualityCheck = document.getElementById("showQualityCheck");
+      const autoReconnectCheck = document.getElementById("autoReconnectCheck");
+      const statusDiv = document.getElementById("statusDiv");
+      const debugLog = document.getElementById("debugLog");
+      const liveIndicator = document.getElementById("liveIndicator");
+      const fpsDisplay = document.getElementById("fpsDisplay");
+      const qualityInfo = document.getElementById("qualityInfo");
+      const connectionInfo = document.getElementById("connectionInfo");
+
+      // Status elements
+      const connectionStatus = document.getElementById("connectionStatus");
+      const framesReceived = document.getElementById("framesReceived");
+      const currentFps = document.getElementById("currentFps");
+      const dataRate = document.getElementById("dataRate");
+
+      // State
+      let isConnected = false;
+      let frameCount = 0;
+      let lastFrameTime = Date.now();
+      let fpsCounter = 0;
+      let fpsInterval = null;
+      let dataTransferred = 0;
+      let lastDataRateUpdate = Date.now();
+      let reconnectAttempts = 0;
+      let maxReconnectAttempts = 5;
+
+      // Utility functions
+      function addDebugLog(message) {
+        const timestamp = new Date().toLocaleTimeString();
+        const entry = document.createElement("div");
+        entry.textContent = `[${timestamp}] ${message}`;
+        debugLog.insertBefore(entry, debugLog.firstChild);
+
+        // Keep only last 50 entries
+        while (debugLog.children.length > 50) {
+          debugLog.removeChild(debugLog.lastChild);
+        }
+      }
+
+      function showStatus(message, type = "info") {
+        statusDiv.innerHTML = `<div class="status ${type}">${message}</div>`;
+      }
+
+      function updateConnectionInfo() {
+        const info = [
+          `Socket ID: ${socket.id || "Not connected"}`,
+          `Reconnect attempts: ${reconnectAttempts}/${maxReconnectAttempts}`,
+          `Auto-reconnect: ${
+            autoReconnectCheck.checked ? "Enabled" : "Disabled"
+          }`,
+          `Last frame: ${new Date(lastFrameTime).toLocaleTimeString()}`,
+        ];
+
+        connectionInfo.innerHTML = info
+          .map((item) => `<div class="viewer-item">${item}</div>`)
+          .join("");
+      }
+
+      function updateFPS() {
+        const now = Date.now();
+        const timeDiff = (now - lastFrameTime) / 1000;
+
+        if (timeDiff > 0) {
+          const fps = Math.round(1 / timeDiff);
+          currentFps.textContent = fps;
+          fpsDisplay.textContent = `${fps} FPS`;
+        }
+
+        lastFrameTime = now;
+      }
+
+      function updateDataRate() {
+        const now = Date.now();
+        const timeDiff = (now - lastDataRateUpdate) / 1000;
+        if (timeDiff > 0) {
+          const rate = (dataTransferred / timeDiff / 1024).toFixed(1);
+          dataRate.textContent = `${rate} KB/s`;
+          dataTransferred = 0;
+          lastDataRateUpdate = now;
+        }
+      }
+
+      function showStream() {
+        viewer.style.display = "block";
+        noStream.style.display = "none";
+        liveIndicator.classList.add("active");
+
+        fullscreenBtn.disabled = false;
+        snapshotBtn.disabled = false;
+
+        // Show optional displays
+        if (showFpsCheck.checked) {
+          fpsDisplay.classList.add("active");
+        }
+        if (showQualityCheck.checked) {
+          qualityInfo.classList.add("active");
+        }
+      }
+
+      function hideStream() {
+        viewer.style.display = "none";
+        noStream.style.display = "block";
+        liveIndicator.classList.remove("active");
+        fpsDisplay.classList.remove("active");
+        qualityInfo.classList.remove("active");
+
+        fullscreenBtn.disabled = true;
+        snapshotBtn.disabled = true;
+      }
+
+      function attemptReconnect() {
+        if (
+          !autoReconnectCheck.checked ||
+          reconnectAttempts >= maxReconnectAttempts
+        ) {
+          return;
+        }
+
+        reconnectAttempts++;
+        addDebugLog(
+          `🔄 Attempting reconnect ${reconnectAttempts}/${maxReconnectAttempts}`
+        );
+
+        setTimeout(() => {
+          if (!isConnected) {
+            socket.connect();
+          }
+        }, 2000 * reconnectAttempts);
+      }
+
+      // Socket.IO event handlers
+      socket.on("connect", () => {
+        isConnected = true;
+        reconnectAttempts = 0;
+
+        addDebugLog("🔗 Connected to server");
+        connectionStatus.textContent = "Connected";
+        showStatus("Connected to server", "success");
+
+        connectBtn.disabled = true;
+        disconnectBtn.disabled = false;
+
+        // Register as viewer
+        socket.emit("register_viewer");
+
+        updateConnectionInfo();
+      });
+
+      socket.on("disconnect", () => {
+        isConnected = false;
+
+        addDebugLog("🔌 Disconnected from server");
+        connectionStatus.textContent = "Disconnected";
+        showStatus("Disconnected from server", "error");
+
+        connectBtn.disabled = false;
+        disconnectBtn.disabled = true;
+
+        hideStream();
+        updateConnectionInfo();
+
+        // Attempt reconnect if enabled
+        attemptReconnect();
+      });
+
+      socket.on("viewer_registered", (data) => {
+        addDebugLog(
+          `👀 Registered as viewer - ${data.broadcasters} broadcasters available`
+        );
+
+        if (data.broadcasters > 0) {
+          showStatus(
+            `Connected! ${data.broadcasters} broadcaster(s) available`,
+            "success"
+          );
+        } else {
+          showStatus("Connected! Waiting for broadcaster...", "info");
+        }
+      });
+
+      socket.on("stream", (imageData) => {
+        try {
+          viewer.src = imageData;
+
+          // Update stats
+          frameCount++;
+          framesReceived.textContent = frameCount;
+          dataTransferred += imageData.length;
+
+          // Update FPS
+          updateFPS();
+
+          // Show stream if hidden
+          if (viewer.style.display === "none") {
+            showStream();
+          }
+
+          // Update data rate every 30 frames
+          if (frameCount % 30 === 0) {
+            updateDataRate();
+          }
+
+          // Update quality info
+          if (showQualityCheck.checked) {
+            const sizeKB = (imageData.length / 1024).toFixed(1);
+            qualityInfo.textContent = `Size: ${sizeKB} KB`;
+          }
+        } catch (error) {
+          addDebugLog(`❌ Stream error: ${error.message}`);
+        }
+      });
+
+      socket.on("broadcaster_disconnected", () => {
+        addDebugLog("📡 Broadcaster disconnected");
+        showStatus(
+          "Broadcaster disconnected - waiting for new stream...",
+          "info"
+        );
+        hideStream();
+      });
+
+      socket.on("service_stats", (data) => {
+        addDebugLog(
+          `📊 Service stats: ${data.totalClients} clients, ${data.broadcasters} broadcasters, ${data.viewers} viewers`
+        );
+      });
+
+      // Button event handlers
+      connectBtn.addEventListener("click", () => {
+        addDebugLog("🔗 Connecting...");
+        socket.connect();
+      });
+
+      disconnectBtn.addEventListener("click", () => {
+        addDebugLog("🔌 Disconnecting...");
+        socket.disconnect();
+      });
+
+      fullscreenBtn.addEventListener("click", () => {
+        if (viewer.requestFullscreen) {
+          viewer.requestFullscreen();
+        } else if (viewer.webkitRequestFullscreen) {
+          viewer.webkitRequestFullscreen();
+        } else if (viewer.msRequestFullscreen) {
+          viewer.msRequestFullscreen();
+        }
+      });
+
+      snapshotBtn.addEventListener("click", () => {
+        const canvas = document.createElement("canvas");
+        const ctx = canvas.getContext("2d");
+
+        canvas.width = viewer.naturalWidth;
+        canvas.height = viewer.naturalHeight;
+
+        ctx.drawImage(viewer, 0, 0);
+
+        const link = document.createElement("a");
+        link.download = `webcam-snapshot-${new Date()
+          .toISOString()
+          .replace(/[:.]/g, "-")}.png`;
+        link.href = canvas.toDataURL();
+        link.click();
+
+        addDebugLog("📸 Snapshot saved");
+      });
+
+      // Control event handlers
+      showFpsCheck.addEventListener("change", (e) => {
+        if (e.target.checked && viewer.style.display !== "none") {
+          fpsDisplay.classList.add("active");
+        } else {
+          fpsDisplay.classList.remove("active");
+        }
+      });
+
+      showQualityCheck.addEventListener("change", (e) => {
+        if (e.target.checked && viewer.style.display !== "none") {
+          qualityInfo.classList.add("active");
+        } else {
+          qualityInfo.classList.remove("active");
+        }
+      });
+
+      autoReconnectCheck.addEventListener("change", () => {
+        reconnectAttempts = 0; // Reset attempts when toggled
+        updateConnectionInfo();
+      });
+
+      // Initialize
+      addDebugLog("📺 Webcam Viewer initialized");
+      showStatus('Click "Connect" to start viewing', "info");
+      updateConnectionInfo();
+
+      // Update connection info periodically
+      setInterval(updateConnectionInfo, 5000);
+    </script>
+  </body>
+</html>

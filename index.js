@@ -9,6 +9,7 @@ const authRoutes = require("./routes/auth");
 const otpRoutes = require("./routes/otpRoutes");
 const googleAuthRoutes = require("./routes/googleAuthRoutes");
 const webcamRoutes = require("./routes/webcamRoutes");
+const basicWebcamRoutes = require("./routes/basicWebcamRoutes");
 const { verifyToken } = require("./admin");
 const {
   authenticateAndVerifyEmail,
@@ -16,6 +17,10 @@ const {
 } = require("./middleware/auth");
 const OTPService = require("./services/otpService");
 const GoogleAuthenticatorService = require("./services/googleAuthService");
+const SocketWebcamService = require("./services/socketWebcamService");
+const FastWebcamService = require("./services/fastWebcamService");
+const OpenCVWebcamService = require("./services/opencvWebcamService");
+const BrowserWebcamService = require("./services/browserWebcamService");
 
 const app = express();
 const otpService = new OTPService();
@@ -61,6 +66,22 @@ const io = socketIo(server, {
   },
 });
 
+// Initialize Socket.IO Webcam Service
+const socketWebcamService = new SocketWebcamService(io);
+console.log("🎥 Socket.IO Webcam Service initialized");
+
+// Initialize Fast Webcam Service
+const fastWebcamService = new FastWebcamService(io);
+console.log("⚡ Fast Webcam Service initialized");
+
+// Initialize OpenCV Webcam Service (commented out due to installation issues)
+// const opencvWebcamService = new OpenCVWebcamService(io);
+// console.log("🔍 OpenCV Webcam Service initialized");
+
+// Initialize Browser Webcam Service
+const browserWebcamService = new BrowserWebcamService(io);
+console.log("🌐 Browser Webcam Service initialized");
+
 // Middleware - Updated for development (allow all origins)
 app.use(
   cors({
@@ -97,6 +118,7 @@ app.use("/api/auth", authRoutes);
 app.use("/api/otp", otpRoutes);
 app.use("/api/google-auth", googleAuthRoutes);
 app.use("/api/webcam", webcamRoutes);
+app.use("/api/basic-webcam", basicWebcamRoutes);
 
 // User authentication
 const users = {
