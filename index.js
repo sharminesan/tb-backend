@@ -18,8 +18,6 @@ const {
 const OTPService = require("./services/otpService");
 const GoogleAuthenticatorService = require("./services/googleAuthService");
 const SocketWebcamService = require("./services/socketWebcamService");
-const FastWebcamService = require("./services/fastWebcamService");
-const OpenCVWebcamService = require("./services/opencvWebcamService");
 const BrowserWebcamService = require("./services/browserWebcamService");
 
 const app = express();
@@ -69,14 +67,6 @@ const io = socketIo(server, {
 // Initialize Socket.IO Webcam Service
 const socketWebcamService = new SocketWebcamService(io);
 console.log("🎥 Socket.IO Webcam Service initialized");
-
-// Initialize Fast Webcam Service
-const fastWebcamService = new FastWebcamService(io);
-console.log("⚡ Fast Webcam Service initialized");
-
-// Initialize OpenCV Webcam Service (commented out due to installation issues)
-// const opencvWebcamService = new OpenCVWebcamService(io);
-// console.log("🔍 OpenCV Webcam Service initialized");
 
 // Initialize Browser Webcam Service
 const browserWebcamService = new BrowserWebcamService(io);
